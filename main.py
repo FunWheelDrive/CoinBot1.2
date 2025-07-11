@@ -106,7 +106,7 @@ def dashboard():
     </head>
     <body>
         <h1>Trading Bot Dashboard</h1>
-        <h2>Account Balance: <span>${{balance:.2f}}</span></h2>
+        <h2>Account Balance: <span>${{ balance|round(2) }}</span></h2>
         <h2>Open Positions</h2>
         <table>
             <tr>
@@ -118,7 +118,7 @@ def dashboard():
                 <th>USD Spent</th>
                 <th>P/L</th>
             </tr>
-            {{positions_html}}
+            {{ positions_html|safe }}
         </table>
         <h2>Trade Log</h2>
         <table>
@@ -133,9 +133,9 @@ def dashboard():
                 <th>P/L %</th>
                 <th>Balance</th>
             </tr>
-            {{trade_log_html}}
+            {{ trade_log_html|safe }}
         </table>
-        <p style="font-size:0.8em; color:#888;">Updated: {{now}}</p>
+        <p style="font-size:0.8em; color:#888;">Updated: {{ now }}</p>
     </body>
     </html>
     """
