@@ -89,84 +89,199 @@ def fetch_latest_prices(symbols):
 def dashboard():
     symbols = list(account.get("positions", {}).keys())
     prices = fetch_latest_prices(symbols)
+
+    # --- Calculate Total P/L ---
+    total_pl = 0
+    for symbol, positions in account.get("positions", {}).items():
+        current_price = prices.get(symbol, 0)
+        for p in positions:
+            entry = p.get("entry_price", 0)
+            volume = p.get("volume", 0)
+            if current_price and entry:
+                total_pl += (current_price - entry) * volume
+
     html = """
     <html>
     <head>
-        <title>Trading Bot Dashboard</title>
+        <title>CoinBot Dashboard</title>
+        <!-- Montserrat Font for modern look -->
+        <link href="https://fonts.googleapis.com/css?family=Montserrat:700,400&display=swap" rel="stylesheet">
         <style>
-            body { font-family: Arial, sans-serif; margin: 30px; background: #f7f7fa; }
-            h1 { color: #2c3e50; }
-            table { border-collapse: collapse; width: 100%; margin-bottom: 30px; }
-            th, td { border: 1px solid #ddd; padding: 8px; }
-            th { background: #222; color: #fff; }
-            tr:nth-child(even){background-color: #f2f2f2;}
-            .profit { color: green; }
-            .loss { color: red; }
+            body {
+                font-family: 'Montserrat', Arial, sans-serif;
+                background: linear-gradient(135deg, #23253a 0%, #1c1e2e 100%);
+                color: #ffe082;
+                margin: 0; padding: 0;
+            }
+            .dashboard-card {
+                background: #232733;
+                border-radius: 18px;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.24);
+                margin: 32px auto 16px auto;
+                padding: 28px 18px 22px 18px;
+                max-width: 570px;
+                border: 2px solid #ffe08244;
+            }
+            h1 {
+                color: #ffe082;
+                font-size: 2.2em;
+                margin-bottom: 10px;
+                text-shadow: 1px 2px 10px #0008;
+                text-align: center;
+            }
+            h2 {
+                color: #ffe082;
+                font-size: 1.2em;
+                margin-top: 26px;
+                margin-bottom: 10px;
+                letter-spacing: 1px;
+            }
+            .total-pl {
+                font-size: 1.6em;
+                font-weight: 700;
+                margin: 18px 0 16px 0;
+                display: inline-block;
+                border-radius: 16px;
+                padding: 10px 28px;
+                background: #15171f;
+                border: 2px solid #ffe08260;
+                box-shadow: 0 3px 12px #0003;
+            }
+            .profit { color: #2fdc8b; font-weight: bold; background: #1b2920; border-radius: 10px; padding: 4px 12px; border: 1.5px solid #2fdc8b44; }
+            .loss { color: #ff4b57; font-weight: bold; background: #392024; border-radius: 10px; padding: 4px 12px; border: 1.5px solid #ff4b5744; }
+            table {
+                border-collapse: separate;
+                border-spacing: 0;
+                width: 100%;
+                margin-bottom: 28px;
+                background: #232733;
+                border-radius: 15px;
+                overflow: hidden;
+                box-shadow: 0 2px 10px #0003;
+            }
+            th, td {
+                padding: 12px 8px;
+                text-align: center;
+            }
+            th {
+                background: #22253c;
+                color: #ffe082;
+                font-size: 1.04em;
+                letter-spacing: 1px;
+            }
+            tr:nth-child(even) { background: #26293f; }
+            tr:nth-child(odd) { background: #1d1f30; }
+            td, th { border-bottom: 1px solid #35395b; }
+            tr:last-child td { border-bottom: none; }
+            span { font-weight: bold; }
+            .footer { text-align: right; color: #aaa; font-size: 0.95em; margin-top: 30px; }
+            @media (max-width: 650px) {
+                .dashboard-card { padding: 10px 3px; max-width: 99vw; }
+                th, td { padding: 5px 2px; font-size: 0.95em; }
+                .total-pl { font-size: 1.2em; padding: 6px 12px; }
+            }
         </style>
     </head>
     <body>
-        <h1>Trading Bot Dashboard</h1>
-        <h2>Account Balance: <span>${{ balance|round(2) }}</span></h2>
-        <h2>Open Positions</h2>
-        <table>
-            <tr>
-                <th>Symbol</th>
-                <th>Volume</th>
-                <th>Entry Price</th>
-                <th>Current Price</th>
-                <th>Leverage</th>
-                <th>USD Spent</th>
-                <th>P/L</th>
-            </tr>
-            {{ positions_html|safe }}
-        </table>
-        <h2>Trade Log</h2>
-        <table>
-            <tr>
-                <th>Time</th>
-                <th>Action</th>
-                <th>Symbol</th>
-                <th>Reason</th>
-                <th>Price</th>
-                <th>Amount</th>
-                <th>Profit</th>
-                <th>P/L %</th>
-                <th>Balance</th>
-            </tr>
-            {{ trade_log_html|safe }}
-        </table>
-        <p style="font-size:0.8em; color:#888;">Updated: {{ now }}</p>
+        <div class="dashboard-card">
+            <h1>CoinBot Dashboard</h1>
+            <h2>Account Balance: <span>${{ balance|round(2) }}</span></h2>
+            <div class="total-pl {{ 'profit' if total_pl > 0 else 'loss' if total_pl < 0 else '' }}">
+                Total P/L: ${{ '{0:.2f}'.format(total_pl) }}
+            </div>
+            <h2>Open Positions</h2>
+            <table>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Volume</th>
+                    <th>Entry Price</th>
+                    <th>Current Price</th>
+                    <th>Leverage</th>
+                    <th>USD Spent</th>
+                    <th>Unrealized P/L</th>
+                </tr>
+                {{ positions_html|safe }}
+            </table>
+            <h2>Trade Log</h2>
+            <table>
+                <tr>
+                    <th>Time</th>
+                    <th>Action</th>
+                    <th>Symbol</th>
+                    <th>Reason</th>
+                    <th>Price</th>
+                    <th>Amount</th>
+                    <th>Profit</th>
+                    <th>P/L %</th>
+                    <th>Balance</th>
+                    <th>Leverage</th>
+                    <th>Avg Entry</th>
+                </tr>
+                {{ trade_log_html|safe }}
+            </table>
+            <div class="footer">
+                Updated: {{ now }}
+            </div>
+        </div>
     </body>
     </html>
     """
 
-    # Build positions table rows
+    # --- Build Positions Table Rows ---
     positions_html = ""
     for symbol, positions in account.get("positions", {}).items():
+        current_price = prices.get(symbol, 0)
         for p in positions:
-            current_price = prices.get(symbol, 0)
             entry = p.get("entry_price", 0)
             volume = p.get("volume", 0)
             usd_spent = p.get("usd_spent", 0)
             leverage = p.get("leverage", 1)
             pl = (current_price - entry) * volume if current_price and entry else 0
             pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
-            positions_html += f"<tr><td>{symbol}</td><td>{volume:.6f}</td><td>${entry:.2f}</td><td>${current_price:.2f}</td><td>{leverage}x</td><td>${usd_spent:.2f}</td><td class='{pl_class}'>{pl:+.2f}</td></tr>"
+            positions_html += (
+                f"<tr><td>{symbol}</td>"
+                f"<td>{volume:.6f}</td>"
+                f"<td>${entry:.2f}</td>"
+                f"<td>${current_price:.2f}</td>"
+                f"<td>{leverage}x</td>"
+                f"<td>${usd_spent:.2f}</td>"
+                f"<td class='{pl_class}'>{pl:+.2f}</td></tr>"
+            )
+    if not positions_html:
+        positions_html = "<tr><td colspan='7'>No open positions</td></tr>"
 
-    # Build trade log table rows (show last 25)
+    # --- Build Trade Log Table Rows (show last 25) ---
     trade_log_html = ""
     for log in reversed(account.get("trade_log", [])[-25:]):
         profit = log.get("profit")
         pl_pct = log.get("pl_pct")
         profit_class = "profit" if profit is not None and profit > 0 else "loss" if profit is not None and profit < 0 else ""
-        trade_log_html += f"<tr><td>{log.get('timestamp')}</td><td>{log.get('action')}</td><td>{log.get('symbol')}</td><td>{log.get('reason')}</td><td>${log.get('price', 0):.2f}</td><td>{log.get('amount', 0):.6f}</td><td class='{profit_class}'>{(profit if profit is not None else '')}</td><td class='{profit_class}'>{(pl_pct if pl_pct is not None else '')}</td><td>${log.get('balance', 0):.2f}</td></tr>"
+        leverage = log.get("leverage", "")
+        avg_entry = log.get("avg_entry", "")
+        trade_log_html += (
+            f"<tr><td>{log.get('timestamp')}</td>"
+            f"<td>{log.get('action')}</td>"
+            f"<td>{log.get('symbol')}</td>"
+            f"<td>{log.get('reason')}</td>"
+            f"<td>${log.get('price', 0):.2f}</td>"
+            f"<td>{log.get('amount', 0):.6f}</td>"
+            f"<td class='{profit_class}'>{(profit if profit is not None else '')}</td>"
+            f"<td class='{profit_class}'>{(pl_pct if pl_pct is not None else '')}</td>"
+            f"<td>${log.get('balance', 0):.2f}</td>"
+            f"<td>{leverage}</td>"
+            f"<td>{avg_entry:.2f}" if avg_entry not in ("", None) else "<td></td>"
+            f"</tr>"
+        )
+    if not trade_log_html:
+        trade_log_html = "<tr><td colspan='11'>No trades yet</td></tr>"
 
     return render_template_string(
         html,
         balance=account.get("balance", 0),
-        positions_html=positions_html or "<tr><td colspan='7'>No open positions</td></tr>",
-        trade_log_html=trade_log_html or "<tr><td colspan='9'>No trades yet</td></tr>",
-        now=pretty_now()
+        positions_html=positions_html,
+        trade_log_html=trade_log_html,
+        now=pretty_now(),
+        total_pl=total_pl,
     )
 
 # --- Health Check Endpoint ---
