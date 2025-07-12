@@ -98,7 +98,15 @@ def dashboard():
             entry = p.get("entry_price", 0)
             volume = p.get("volume", 0)
             leverage = p.get("leverage", 1)
-            margin_used = p.get("margin_used", 0)
+            # Robust margin_used detection
+            margin_used = p.get("margin_used")
+            if margin_used is None:
+                margin_used = p.get("usd_spent")
+            if margin_used is None or margin_used == 0:
+                if entry and volume and leverage:
+                    margin_used = (entry * volume) / leverage
+                else:
+                    margin_used = 0
             if current_price and entry:
                 pnl = (current_price - entry) * volume * leverage
                 equity += margin_used + pnl
@@ -141,7 +149,15 @@ def dashboard():
             entry = p.get("entry_price", 0)
             volume = p.get("volume", 0)
             leverage = p.get("leverage", 1)
-            margin_used = p.get("margin_used", 0)
+            # Robust margin_used detection (for old and new positions)
+            margin_used = p.get("margin_used")
+            if margin_used is None:
+                margin_used = p.get("usd_spent")
+            if margin_used is None or margin_used == 0:
+                if entry and volume and leverage:
+                    margin_used = (entry * volume) / leverage
+                else:
+                    margin_used = 0
             position_size = margin_used * leverage
             if entry == 0 or current_price == 0:
                 continue  # skip positions with missing price
@@ -479,7 +495,21 @@ def webhook():
             poslist = account["positions"].get(symbol, [])
             if poslist:
                 total_volume = sum(p["volume"] for p in poslist)
-                total_margin = sum(p["margin_used"] for p in poslist)
+                # Robust margin_used sum for old and new positions
+                total_margin = 0
+                for p in poslist:
+                    mu = p.get("margin_used")
+                    if mu is None:
+                        mu = p.get("usd_spent")
+                    if mu is None or mu == 0:
+                        entry = p.get("entry_price", 0)
+                        volume = p.get("volume", 0)
+                        leverage = p.get("leverage", 1)
+                        if entry and volume and leverage:
+                            mu = (entry * volume) / leverage
+                        else:
+                            mu = 0
+                    total_margin += mu
                 avg_entry = sum(p["entry_price"] * p["volume"] for p in poslist) / total_volume
                 leverage = poslist[0].get("leverage", 5)
                 profit = (price - avg_entry) * total_volume * leverage
