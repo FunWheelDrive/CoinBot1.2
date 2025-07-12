@@ -84,6 +84,8 @@ def fetch_latest_prices(symbols):
 
 @app.route('/', methods=['GET'])
 def dashboard():
+    global account
+    account = load_account()
     symbols = list(account.get("positions", {}).keys())
     prices = fetch_latest_prices(symbols)
 
