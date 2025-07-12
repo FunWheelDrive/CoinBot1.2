@@ -90,21 +90,90 @@ def dashboard():
     symbols = list(account.get("positions", {}).keys())
     prices = fetch_latest_prices(symbols)
 
-    # --- Calculate Total P/L ---
+    # --- Calculate Total P/L (with leverage) ---
     total_pl = 0
     for symbol, positions in account.get("positions", {}).items():
         current_price = prices.get(symbol, 0)
         for p in positions:
             entry = p.get("entry_price", 0)
             volume = p.get("volume", 0)
+            leverage = p.get("leverage", 1)
             if current_price and entry:
-                total_pl += (current_price - entry) * volume
+                total_pl += (current_price - entry) * volume * leverage
 
+    # --- Calculate Per-Coin P/L from Trade Log (with leverage) ---
+    coin_stats = {}
+    for log in account.get("trade_log", []):
+        sym = log.get("symbol")
+        profit = log.get("profit")
+        if sym is not None and profit is not None:
+            coin_stats.setdefault(sym, 0)
+            coin_stats[sym] += profit  # profit is already leveraged below
+
+    # Build Coin Summary HTML (as a sidebar)
+    coin_stats_html = ""
+    for coin, pl in sorted(coin_stats.items()):
+        pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
+        coin_stats_html += (
+            f"<tr><td>{coin}</td>"
+            f"<td class='{pl_class}'>{pl:+.2f}</td></tr>"
+        )
+    if not coin_stats_html:
+        coin_stats_html = "<tr><td colspan='2'>No trades yet</td></tr>"
+
+    # --- Build Positions Table Rows (with leverage) ---
+    positions_html = ""
+    for symbol, positions in account.get("positions", {}).items():
+        current_price = prices.get(symbol, 0)
+        for p in positions:
+            entry = p.get("entry_price", 0)
+            volume = p.get("volume", 0)
+            usd_spent = p.get("usd_spent", 0)
+            leverage = p.get("leverage", 1)
+            pl = (current_price - entry) * volume * leverage if current_price and entry else 0
+            pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
+            positions_html += (
+                f"<tr><td>{symbol}</td>"
+                f"<td>{volume:.6f}</td>"
+                f"<td>${entry:.2f}</td>"
+                f"<td>${current_price:.2f}</td>"
+                f"<td>{leverage}x</td>"
+                f"<td>${usd_spent:.2f}</td>"
+                f"<td class='{pl_class}'>{pl:+.2f}</td></tr>"
+            )
+    if not positions_html:
+        positions_html = "<tr><td colspan='7'>No open positions</td></tr>"
+
+    # --- Build Trade Log Table Rows (ALL trades, profit with leverage) ---
+    trade_log_html = ""
+    for log in reversed(account.get("trade_log", [])):
+        profit = log.get("profit")
+        pl_pct = log.get("pl_pct")
+        profit_class = "profit" if profit is not None and profit > 0 else "loss" if profit is not None and profit < 0 else ""
+        leverage = log.get("leverage", "")
+        avg_entry = log.get("avg_entry", "")
+        trade_log_html += (
+            f"<tr><td>{log.get('timestamp')}</td>"
+            f"<td>{log.get('action')}</td>"
+            f"<td>{log.get('symbol')}</td>"
+            f"<td>{log.get('reason')}</td>"
+            f"<td>${log.get('price', 0):.2f}</td>"
+            f"<td>{log.get('amount', 0):.6f}</td>"
+            f"<td class='{profit_class}'>{(profit if profit is not None else '')}</td>"
+            f"<td class='{profit_class}'>{(pl_pct if pl_pct is not None else '')}</td>"
+            f"<td>${log.get('balance', 0):.2f}</td>"
+            f"<td>{leverage}</td>"
+            f"<td>{avg_entry:.2f}" if avg_entry not in ("", None) else "<td></td>"
+            f"</tr>"
+        )
+    if not trade_log_html:
+        trade_log_html = "<tr><td colspan='11'>No trades yet</td></tr>"
+
+    # --- Dashboard HTML with Sidebar ---
     html = """
     <html>
     <head>
         <title>CoinBot Dashboard</title>
-        <!-- Montserrat Font for modern look -->
         <link href="https://fonts.googleapis.com/css?family=Montserrat:700,400&display=swap" rel="stylesheet">
         <style>
             body {
@@ -113,14 +182,31 @@ def dashboard():
                 color: #ffe082;
                 margin: 0; padding: 0;
             }
+            .container-flex {
+                display: flex;
+                justify-content: center;
+                align-items: flex-start;
+                gap: 36px;
+                margin: 40px auto;
+                max-width: 1500px;
+                width: 100%;
+            }
             .dashboard-card {
                 background: #232733;
                 border-radius: 18px;
                 box-shadow: 0 8px 32px rgba(0,0,0,0.24);
-                margin: 32px auto 16px auto;
                 padding: 28px 18px 22px 18px;
-                max-width: 570px;
+                width: 950px;
                 border: 2px solid #ffe08244;
+            }
+            .sidebar-card {
+                background: #191a25;
+                border-radius: 14px;
+                padding: 22px 12px 18px 12px;
+                min-width: 210px;
+                border: 2px solid #ffe08233;
+                margin-top: 0;
+                height: fit-content;
             }
             h1 {
                 color: #ffe082;
@@ -147,8 +233,8 @@ def dashboard():
                 border: 2px solid #ffe08260;
                 box-shadow: 0 3px 12px #0003;
             }
-            .profit { color: #2fdc8b; font-weight: bold; background: #1b2920; border-radius: 10px; padding: 4px 12px; border: 1.5px solid #2fdc8b44; }
-            .loss { color: #ff4b57; font-weight: bold; background: #392024; border-radius: 10px; padding: 4px 12px; border: 1.5px solid #ff4b5744; }
+            .profit { color: #2fdc8b; font-weight: bold;}
+            .loss { color: #ff4b57; font-weight: bold;}
             table {
                 border-collapse: separate;
                 border-spacing: 0;
@@ -160,8 +246,9 @@ def dashboard():
                 box-shadow: 0 2px 10px #0003;
             }
             th, td {
-                padding: 12px 8px;
+                padding: 10px 7px;
                 text-align: center;
+                border-bottom: 1px solid #35395b;
             }
             th {
                 background: #22253c;
@@ -169,111 +256,94 @@ def dashboard():
                 font-size: 1.04em;
                 letter-spacing: 1px;
             }
-            tr:nth-child(even) { background: #26293f; }
-            tr:nth-child(odd) { background: #1d1f30; }
-            td, th { border-bottom: 1px solid #35395b; }
+            tr:nth-child(even) { background: #232733; }
+            tr:nth-child(odd) { background: #282b40; }
             tr:last-child td { border-bottom: none; }
-            span { font-weight: bold; }
+            .sidebar-card h3 {
+                color: #ffe082;
+                font-size: 1.08em;
+                margin-bottom: 10px;
+                text-align: center;
+                font-weight: 700;
+            }
+            .sidebar-table {
+                background: #181a2c;
+                width: 100%;
+                border-radius: 9px;
+                box-shadow: 0 2px 7px #0002;
+                margin-top: 8px;
+            }
+            .sidebar-table th, .sidebar-table td {
+                padding: 7px 6px;
+                font-size: 1em;
+                border-bottom: 1px solid #2b2d46;
+            }
+            .sidebar-table th {
+                background: #191a25;
+                color: #ffe082;
+            }
+            .sidebar-table tr:last-child td { border-bottom: none; }
             .footer { text-align: right; color: #aaa; font-size: 0.95em; margin-top: 30px; }
-            @media (max-width: 650px) {
-                .dashboard-card { padding: 10px 3px; max-width: 99vw; }
-                th, td { padding: 5px 2px; font-size: 0.95em; }
-                .total-pl { font-size: 1.2em; padding: 6px 12px; }
+            @media (max-width: 1200px) {
+                .container-flex { flex-direction: column; align-items: stretch; }
+                .dashboard-card { width: 100vw; min-width: 0; }
+                .sidebar-card { min-width: 0; margin-top: 16px;}
             }
         </style>
     </head>
     <body>
-        <div class="dashboard-card">
-            <h1>CoinBot Dashboard</h1>
-            <h2>Account Balance: <span>${{ balance|round(2) }}</span></h2>
-            <div class="total-pl {{ 'profit' if total_pl > 0 else 'loss' if total_pl < 0 else '' }}">
-                Total P/L: ${{ '{0:.2f}'.format(total_pl) }}
+        <div class="container-flex">
+            <div class="dashboard-card">
+                <h1>CoinBot Dashboard</h1>
+                <h2>Account Balance: <span>${{ balance|round(2) }}</span></h2>
+                <div class="total-pl {{ 'profit' if total_pl > 0 else 'loss' if total_pl < 0 else '' }}">
+                    Total P/L: ${{ '{0:.2f}'.format(total_pl) }}
+                </div>
+                <h2>Open Positions</h2>
+                <table>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Volume</th>
+                        <th>Entry Price</th>
+                        <th>Current Price</th>
+                        <th>Leverage</th>
+                        <th>USD Spent</th>
+                        <th>Unrealized P/L</th>
+                    </tr>
+                    {{ positions_html|safe }}
+                </table>
+                <h2>Trade Log</h2>
+                <table>
+                    <tr>
+                        <th>Time</th>
+                        <th>Action</th>
+                        <th>Symbol</th>
+                        <th>Reason</th>
+                        <th>Price</th>
+                        <th>Amount</th>
+                        <th>Profit</th>
+                        <th>P/L %</th>
+                        <th>Balance</th>
+                        <th>Leverage</th>
+                        <th>Avg Entry</th>
+                    </tr>
+                    {{ trade_log_html|safe }}
+                </table>
+                <div class="footer">
+                    Updated: {{ now }}
+                </div>
             </div>
-            <h2>Open Positions</h2>
-            <table>
-                <tr>
-                    <th>Symbol</th>
-                    <th>Volume</th>
-                    <th>Entry Price</th>
-                    <th>Current Price</th>
-                    <th>Leverage</th>
-                    <th>USD Spent</th>
-                    <th>Unrealized P/L</th>
-                </tr>
-                {{ positions_html|safe }}
-            </table>
-            <h2>Trade Log</h2>
-            <table>
-                <tr>
-                    <th>Time</th>
-                    <th>Action</th>
-                    <th>Symbol</th>
-                    <th>Reason</th>
-                    <th>Price</th>
-                    <th>Amount</th>
-                    <th>Profit</th>
-                    <th>P/L %</th>
-                    <th>Balance</th>
-                    <th>Leverage</th>
-                    <th>Avg Entry</th>
-                </tr>
-                {{ trade_log_html|safe }}
-            </table>
-            <div class="footer">
-                Updated: {{ now }}
+            <div class="sidebar-card">
+                <h3>Coin P/L Summary</h3>
+                <table class="sidebar-table">
+                    <tr><th>Coin</th><th>Total P/L</th></tr>
+                    {{ coin_stats_html|safe }}
+                </table>
             </div>
         </div>
     </body>
     </html>
     """
-
-    # --- Build Positions Table Rows ---
-    positions_html = ""
-    for symbol, positions in account.get("positions", {}).items():
-        current_price = prices.get(symbol, 0)
-        for p in positions:
-            entry = p.get("entry_price", 0)
-            volume = p.get("volume", 0)
-            usd_spent = p.get("usd_spent", 0)
-            leverage = p.get("leverage", 1)
-            pl = (current_price - entry) * volume if current_price and entry else 0
-            pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
-            positions_html += (
-                f"<tr><td>{symbol}</td>"
-                f"<td>{volume:.6f}</td>"
-                f"<td>${entry:.2f}</td>"
-                f"<td>${current_price:.2f}</td>"
-                f"<td>{leverage}x</td>"
-                f"<td>${usd_spent:.2f}</td>"
-                f"<td class='{pl_class}'>{pl:+.2f}</td></tr>"
-            )
-    if not positions_html:
-        positions_html = "<tr><td colspan='7'>No open positions</td></tr>"
-
-    # --- Build Trade Log Table Rows (show last 25) ---
-    trade_log_html = ""
-    for log in reversed(account.get("trade_log", [])[-25:]):
-        profit = log.get("profit")
-        pl_pct = log.get("pl_pct")
-        profit_class = "profit" if profit is not None and profit > 0 else "loss" if profit is not None and profit < 0 else ""
-        leverage = log.get("leverage", "")
-        avg_entry = log.get("avg_entry", "")
-        trade_log_html += (
-            f"<tr><td>{log.get('timestamp')}</td>"
-            f"<td>{log.get('action')}</td>"
-            f"<td>{log.get('symbol')}</td>"
-            f"<td>{log.get('reason')}</td>"
-            f"<td>${log.get('price', 0):.2f}</td>"
-            f"<td>{log.get('amount', 0):.6f}</td>"
-            f"<td class='{profit_class}'>{(profit if profit is not None else '')}</td>"
-            f"<td class='{profit_class}'>{(pl_pct if pl_pct is not None else '')}</td>"
-            f"<td>${log.get('balance', 0):.2f}</td>"
-            f"<td>{leverage}</td>"
-            f"<td>{avg_entry:.2f}" if avg_entry not in ("", None) else "<td></td>"
-            f"</tr>"
-        )
-    if not trade_log_html:
-        trade_log_html = "<tr><td colspan='11'>No trades yet</td></tr>"
 
     return render_template_string(
         html,
@@ -282,6 +352,7 @@ def dashboard():
         trade_log_html=trade_log_html,
         now=pretty_now(),
         total_pl=total_pl,
+        coin_stats_html=coin_stats_html,
     )
 
 # --- Health Check Endpoint ---
@@ -389,7 +460,8 @@ def webhook():
                 total_volume = sum(p["volume"] for p in poslist)
                 total_margin = sum(p["usd_spent"] for p in poslist)
                 avg_entry = sum(p["entry_price"] * p["volume"] for p in poslist) / total_volume
-                profit = (price - avg_entry) * total_volume
+                leverage = poslist[0].get("leverage", 5)  # Use leverage from the position, default 5
+                profit = (price - avg_entry) * total_volume * leverage
                 pl_pct = ((price - avg_entry) / avg_entry * leverage * 100) if avg_entry > 0 else 0
 
                 account["balance"] += total_margin + profit
@@ -400,7 +472,7 @@ def webhook():
                     "reason": reason,
                     "price": price,
                     "amount": total_volume,
-                    "profit": round(profit, 2),
+                    "profit": round(profit, 2),  # Already leveraged
                     "pl_pct": round(pl_pct, 2),
                     "balance": round(account["balance"], 2),
                     "leverage": leverage,
@@ -436,4 +508,3 @@ def webhook():
 if __name__ == '__main__':
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
-
