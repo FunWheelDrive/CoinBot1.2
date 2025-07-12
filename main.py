@@ -49,10 +49,8 @@ def load_account():
 
 account = load_account()
 
-# --- Utility Functions ---
 def pretty_now():
-    return datetime.now(
-        ZoneInfo("America/Edmonton")).strftime('%Y-%m-%d %H:%M:%S %Z')
+    return datetime.now(ZoneInfo("America/Edmonton")).strftime('%Y-%m-%d %H:%M:%S %Z')
 
 def fetch_latest_prices(symbols):
     symbol_map = {
@@ -84,7 +82,6 @@ def fetch_latest_prices(symbols):
         logger.error(f"Price fetch failed: {str(e)}")
     return prices
 
-# --- Dashboard Webpage ---
 @app.route('/', methods=['GET'])
 def dashboard():
     symbols = list(account.get("positions", {}).keys())
@@ -101,10 +98,10 @@ def dashboard():
             entry = p.get("entry_price", 0)
             volume = p.get("volume", 0)
             leverage = p.get("leverage", 1)
-            usd_spent = p.get("usd_spent", 0)
+            margin_used = p.get("margin_used", 0)
             if current_price and entry:
                 pnl = (current_price - entry) * volume * leverage
-                equity += usd_spent + pnl
+                equity += margin_used + pnl
 
     # --- Calculate Total P/L (with leverage) ---
     total_pl = 0
@@ -117,16 +114,15 @@ def dashboard():
             if current_price and entry:
                 total_pl += (current_price - entry) * volume * leverage
 
-    # --- Calculate Per-Coin P/L from Trade Log (with leverage) ---
+    # --- Per-coin net P/L from trade log ---
     coin_stats = {}
     for log in account.get("trade_log", []):
         sym = log.get("symbol")
         profit = log.get("profit")
         if sym is not None and profit is not None:
             coin_stats.setdefault(sym, 0)
-            coin_stats[sym] += profit  # profit is already leveraged below
+            coin_stats[sym] += profit
 
-    # Build Coin Summary HTML (as a sidebar)
     coin_stats_html = ""
     for coin, pl in sorted(coin_stats.items()):
         pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
@@ -137,7 +133,7 @@ def dashboard():
     if not coin_stats_html:
         coin_stats_html = "<tr><td colspan='2'>No trades yet</td></tr>"
 
-    # --- Build Positions Table Rows (with leverage and position size) ---
+    # --- Build positions table rows ---
     positions_html = ""
     for symbol, positions in account.get("positions", {}).items():
         current_price = prices.get(symbol, 0)
@@ -145,8 +141,11 @@ def dashboard():
             entry = p.get("entry_price", 0)
             volume = p.get("volume", 0)
             leverage = p.get("leverage", 1)
-            position_size = entry * volume * leverage if entry and volume else 0
-            pl = (current_price - entry) * volume * leverage if current_price and entry else 0
+            margin_used = p.get("margin_used", 0)
+            position_size = margin_used * leverage
+            if entry == 0 or current_price == 0:
+                continue  # skip positions with missing price
+            pl = (current_price - entry) * volume * leverage
             pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
             positions_html += (
                 f"<tr><td>{symbol}</td>"
@@ -154,13 +153,14 @@ def dashboard():
                 f"<td>${entry:.2f}</td>"
                 f"<td>${current_price:.2f}</td>"
                 f"<td>{leverage}x</td>"
+                f"<td>${margin_used:.2f}</td>"
                 f"<td>${position_size:.2f}</td>"
                 f"<td class='{pl_class}'>{pl:+.2f}</td></tr>"
             )
     if not positions_html:
-        positions_html = "<tr><td colspan='7'>No open positions</td></tr>"
+        positions_html = "<tr><td colspan='8'>No open positions</td></tr>"
 
-    # --- Build Trade Log Table Rows (ALL trades, profit with leverage) ---
+    # --- Trade log (all trades, profit with leverage) ---
     trade_log_html = ""
     for log in reversed(account.get("trade_log", [])):
         profit = log.get("profit")
@@ -326,6 +326,7 @@ def dashboard():
                         <th>Entry Price</th>
                         <th>Current Price</th>
                         <th>Leverage</th>
+                        <th>Margin Used</th>
                         <th>Position Size</th>
                         <th>Unrealized P/L</th>
                     </tr>
@@ -376,12 +377,10 @@ def dashboard():
         coin_stats_html=coin_stats_html,
     )
 
-# --- Health Check Endpoint ---
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "ok", "time": pretty_now()}), 200
 
-# --- Webhook Endpoint for TradingView ---
 @app.route('/webhook', methods=['POST'])
 def webhook():
     global account
@@ -424,23 +423,24 @@ def webhook():
         margin_pct = 0.05
 
         if action == "buy":
-            margin_cash = account["balance"] * margin_pct
-            position_size = margin_cash * leverage
+            available_cash = account["balance"]
+            margin_used = available_cash * margin_pct
+            position_size = margin_used * leverage
             volume = round(position_size / price, 6) if price > 0 else 0
 
             poslist = account["positions"].get(symbol, [])
             if len(poslist) < 5 and volume > 0:
-                if account["balance"] >= margin_cash:
+                if account["balance"] >= margin_used:
                     new_position = {
                         "volume": volume,
                         "entry_price": price,
                         "timestamp": timestamp,
-                        "usd_spent": margin_cash,
+                        "margin_used": margin_used,
                         "leverage": leverage,
                     }
                     poslist.append(new_position)
                     account["positions"][symbol] = poslist
-                    account["balance"] -= margin_cash
+                    account["balance"] -= margin_used
                     account["trade_log"].append({
                         "timestamp": timestamp,
                         "action": "buy",
@@ -454,7 +454,7 @@ def webhook():
                         "leverage": leverage,
                     })
                     save_account()
-                    logger.info(f"BUY: {volume} {symbol} @ ${price}")
+                    logger.info(f"BUY: {volume} {symbol} @ ${price} | Margin used: ${margin_used:.2f} | Position size: ${position_size:.2f}")
                     return jsonify({
                         "status": "success",
                         "action": "buy",
@@ -479,9 +479,9 @@ def webhook():
             poslist = account["positions"].get(symbol, [])
             if poslist:
                 total_volume = sum(p["volume"] for p in poslist)
-                total_margin = sum(p["usd_spent"] for p in poslist)
+                total_margin = sum(p["margin_used"] for p in poslist)
                 avg_entry = sum(p["entry_price"] * p["volume"] for p in poslist) / total_volume
-                leverage = poslist[0].get("leverage", 5)  # Use leverage from the position, default 5
+                leverage = poslist[0].get("leverage", 5)
                 profit = (price - avg_entry) * total_volume * leverage
                 pl_pct = ((price - avg_entry) / avg_entry * leverage * 100) if avg_entry > 0 else 0
 
@@ -493,7 +493,7 @@ def webhook():
                     "reason": reason,
                     "price": price,
                     "amount": total_volume,
-                    "profit": round(profit, 2),  # Already leveraged
+                    "profit": round(profit, 2),
                     "pl_pct": round(pl_pct, 2),
                     "balance": round(account["balance"], 2),
                     "leverage": leverage,
@@ -525,7 +525,6 @@ def webhook():
             "message": "Internal server error"
         }), 500
 
-# --- Run the Server ---
 if __name__ == '__main__':
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
