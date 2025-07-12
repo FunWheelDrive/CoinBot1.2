@@ -90,6 +90,22 @@ def dashboard():
     symbols = list(account.get("positions", {}).keys())
     prices = fetch_latest_prices(symbols)
 
+    # Calculate Available Cash (not in open positions)
+    available_cash = account.get("balance", 0)
+
+    # Calculate Equity (Available Cash + open positions at current price, including leveraged P&L)
+    equity = available_cash
+    for symbol, positions in account.get("positions", {}).items():
+        current_price = prices.get(symbol, 0)
+        for p in positions:
+            entry = p.get("entry_price", 0)
+            volume = p.get("volume", 0)
+            leverage = p.get("leverage", 1)
+            usd_spent = p.get("usd_spent", 0)
+            if current_price and entry:
+                pnl = (current_price - entry) * volume * leverage
+                equity += usd_spent + pnl
+
     # --- Calculate Total P/L (with leverage) ---
     total_pl = 0
     for symbol, positions in account.get("positions", {}).items():
@@ -295,7 +311,10 @@ def dashboard():
         <div class="container-flex">
             <div class="dashboard-card">
                 <h1>CoinBot Dashboard</h1>
-                <h2>Account Balance: <span>${{ balance|round(2) }}</span></h2>
+                <h2>
+                    Account Balance (Equity): <span>${{ equity|round(2) }}</span><br>
+                    Available Cash: <span>${{ available_cash|round(2) }}</span>
+                </h2>
                 <div class="total-pl {{ 'profit' if total_pl > 0 else 'loss' if total_pl < 0 else '' }}">
                     Total P/L: ${{ '{0:.2f}'.format(total_pl) }}
                 </div>
@@ -348,6 +367,8 @@ def dashboard():
     return render_template_string(
         html,
         balance=account.get("balance", 0),
+        equity=equity,
+        available_cash=available_cash,
         positions_html=positions_html,
         trade_log_html=trade_log_html,
         now=pretty_now(),
