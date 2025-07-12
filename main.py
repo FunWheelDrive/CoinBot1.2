@@ -19,35 +19,54 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-DATA_FILE = "account.json"
+app.secret_key = "supersecretkey"
+
 STARTING_BALANCE = 1000.00
 file_lock = threading.Lock()
 
-# --- Account Data Management ---
-def save_account():
-    with file_lock:
-        with open(DATA_FILE, "w") as f:
-            json.dump(account, f, indent=2, default=str)
-    logger.info("Account data saved")
+# --- Per-bot config ---
+BOTS = {
+    "1.0": {
+        "name": "Coinbot 1.0",
+        "color": "#2196f3",
+        "data_file": "account_1.json"
+    },
+    "2.0": {
+        "name": "Coinbot 2.0",
+        "color": "#4caf50",
+        "data_file": "account_2.json"
+    },
+    "3.0": {
+        "name": "Coinbot 3.0",
+        "color": "#f44336",
+        "data_file": "account_3.json"
+    }
+}
 
-def load_account():
-    if os.path.exists(DATA_FILE):
+def save_account(bot_id, account):
+    data_file = BOTS[bot_id]["data_file"]
+    with file_lock:
+        with open(data_file, "w") as f:
+            json.dump(account, f, indent=2, default=str)
+    logger.info(f"Account data saved for bot {bot_id}")
+
+def load_account(bot_id):
+    data_file = BOTS[bot_id]["data_file"]
+    if os.path.exists(data_file):
         with file_lock:
-            with open(DATA_FILE, "r") as f:
+            with open(data_file, "r") as f:
                 loaded = json.load(f)
                 loaded["balance"] = float(loaded.get("balance", STARTING_BALANCE))
                 loaded["positions"] = loaded.get("positions", {})
                 loaded["trade_log"] = loaded.get("trade_log", [])
-                logger.info("Account data loaded from file")
+                logger.info(f"Account data loaded from file for bot {bot_id}")
                 return loaded
-    logger.info("No account file found, creating new account")
+    logger.info(f"No account file found for bot {bot_id}, creating new account")
     return {
         "balance": STARTING_BALANCE,
         "positions": {},
         "trade_log": []
     }
-
-account = load_account()
 
 def pretty_now():
     return datetime.now(ZoneInfo("America/Edmonton")).strftime('%Y-%m-%d %H:%M:%S %Z')
@@ -82,359 +101,249 @@ def fetch_latest_prices(symbols):
         logger.error(f"Price fetch failed: {str(e)}")
     return prices
 
-@app.route('/', methods=['GET'])
+@app.route('/')
 def dashboard():
-    global account
-    account = load_account()
-    symbols = list(account.get("positions", {}).keys())
-    prices = fetch_latest_prices(symbols)
+    active = request.args.get("active", "1.0")
+    if active not in BOTS:
+        active = "1.0"
 
-    # Calculate Available Cash (not in open positions)
-    available_cash = account.get("balance", 0)
+    dashboards = {}
+    for bot_id, bot_cfg in BOTS.items():
+        account = load_account(bot_id)
+        symbols = list(account.get("positions", {}).keys())
+        prices = fetch_latest_prices(symbols)
+        available_cash = account.get("balance", 0)
+        equity = available_cash
+        for symbol, positions in account.get("positions", {}).items():
+            current_price = prices.get(symbol, 0)
+            for p in positions:
+                entry = p.get("entry_price", 0)
+                volume = p.get("volume", 0)
+                leverage = p.get("leverage", 1)
+                margin_used = p.get("margin_used")
+                if margin_used is None:
+                    margin_used = p.get("usd_spent")
+                if margin_used is None or margin_used == 0:
+                    if entry and volume and leverage:
+                        margin_used = (entry * volume) / leverage
+                    else:
+                        margin_used = 0
+                if current_price and entry:
+                    pnl = (current_price - entry) * volume * leverage
+                    equity += margin_used + pnl
 
-    # Calculate Equity (Available Cash + open positions at current price, including leveraged P&L)
-    equity = available_cash
-    for symbol, positions in account.get("positions", {}).items():
-        current_price = prices.get(symbol, 0)
-        for p in positions:
-            entry = p.get("entry_price", 0)
-            volume = p.get("volume", 0)
-            leverage = p.get("leverage", 1)
-            # Robust margin_used detection
-            margin_used = p.get("margin_used")
-            if margin_used is None:
-                margin_used = p.get("usd_spent")
-            if margin_used is None or margin_used == 0:
-                if entry and volume and leverage:
-                    margin_used = (entry * volume) / leverage
-                else:
-                    margin_used = 0
-            if current_price and entry:
-                pnl = (current_price - entry) * volume * leverage
-                equity += margin_used + pnl
+        total_pl = 0
+        for symbol, positions in account.get("positions", {}).items():
+            current_price = prices.get(symbol, 0)
+            for p in positions:
+                entry = p.get("entry_price", 0)
+                volume = p.get("volume", 0)
+                leverage = p.get("leverage", 1)
+                if current_price and entry:
+                    total_pl += (current_price - entry) * volume * leverage
 
-    # --- Calculate Total P/L (with leverage) ---
-    total_pl = 0
-    for symbol, positions in account.get("positions", {}).items():
-        current_price = prices.get(symbol, 0)
-        for p in positions:
-            entry = p.get("entry_price", 0)
-            volume = p.get("volume", 0)
-            leverage = p.get("leverage", 1)
-            if current_price and entry:
-                total_pl += (current_price - entry) * volume * leverage
+        coin_stats = {}
+        for log in account.get("trade_log", []):
+            sym = log.get("symbol")
+            profit = log.get("profit")
+            if sym is not None and profit is not None:
+                coin_stats.setdefault(sym, 0)
+                coin_stats[sym] += profit
 
-    # --- Per-coin net P/L from trade log ---
-    coin_stats = {}
-    for log in account.get("trade_log", []):
-        sym = log.get("symbol")
-        profit = log.get("profit")
-        if sym is not None and profit is not None:
-            coin_stats.setdefault(sym, 0)
-            coin_stats[sym] += profit
-
-    coin_stats_html = ""
-    for coin, pl in sorted(coin_stats.items()):
-        pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
-        coin_stats_html += (
-            f"<tr><td>{coin}</td>"
-            f"<td class='{pl_class}'>{pl:+.2f}</td></tr>"
-        )
-    if not coin_stats_html:
-        coin_stats_html = "<tr><td colspan='2'>No trades yet</td></tr>"
-
-    # --- Build positions table rows ---
-    positions_html = ""
-    for symbol, positions in account.get("positions", {}).items():
-        current_price = prices.get(symbol, 0)
-        for p in positions:
-            entry = p.get("entry_price", 0)
-            volume = p.get("volume", 0)
-            leverage = p.get("leverage", 1)
-            # Robust margin_used detection (for old and new positions)
-            margin_used = p.get("margin_used")
-            if margin_used is None:
-                margin_used = p.get("usd_spent")
-            if margin_used is None or margin_used == 0:
-                if entry and volume and leverage:
-                    margin_used = (entry * volume) / leverage
-                else:
-                    margin_used = 0
-            position_size = margin_used * leverage
-            if entry == 0 or current_price == 0:
-                continue  # skip positions with missing price
-            pl = (current_price - entry) * volume * leverage
+        coin_stats_html = ""
+        for coin, pl in sorted(coin_stats.items()):
             pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
-            positions_html += (
-                f"<tr><td>{symbol}</td>"
-                f"<td>{volume:.6f}</td>"
-                f"<td>${entry:.2f}</td>"
-                f"<td>${current_price:.2f}</td>"
-                f"<td>{leverage}x</td>"
-                f"<td>${margin_used:.2f}</td>"
-                f"<td>${position_size:.2f}</td>"
+            coin_stats_html += (
+                f"<tr><td>{coin}</td>"
                 f"<td class='{pl_class}'>{pl:+.2f}</td></tr>"
             )
-    if not positions_html:
-        positions_html = "<tr><td colspan='8'>No open positions</td></tr>"
+        if not coin_stats_html:
+            coin_stats_html = "<tr><td colspan='2'>No trades yet</td></tr>"
 
-    # --- Trade log (all trades, profit with leverage) ---
-    trade_log_html = ""
-    for log in reversed(account.get("trade_log", [])):
-        profit = log.get("profit")
-        pl_pct = log.get("pl_pct")
-        profit_class = "profit" if profit is not None and profit > 0 else "loss" if profit is not None and profit < 0 else ""
-        leverage = log.get("leverage", "")
-        avg_entry = log.get("avg_entry", "")
-        trade_log_html += (
-            f"<tr><td>{log.get('timestamp')}</td>"
-            f"<td>{log.get('action')}</td>"
-            f"<td>{log.get('symbol')}</td>"
-            f"<td>{log.get('reason')}</td>"
-            f"<td>${log.get('price', 0):.2f}</td>"
-            f"<td>{log.get('amount', 0):.6f}</td>"
-            f"<td class='{profit_class}'>{(profit if profit is not None else '')}</td>"
-            f"<td class='{profit_class}'>{(pl_pct if pl_pct is not None else '')}</td>"
-            f"<td>${log.get('balance', 0):.2f}</td>"
-            f"<td>{leverage}</td>"
-            f"<td>{avg_entry:.2f}" if avg_entry not in ("", None) else "<td></td>"
-            f"</tr>"
+        positions_html = ""
+        for symbol, positions in account.get("positions", {}).items():
+            current_price = prices.get(symbol, 0)
+            for p in positions:
+                entry = p.get("entry_price", 0)
+                volume = p.get("volume", 0)
+                leverage = p.get("leverage", 1)
+                margin_used = p.get("margin_used")
+                if margin_used is None:
+                    margin_used = p.get("usd_spent")
+                if margin_used is None or margin_used == 0:
+                    if entry and volume and leverage:
+                        margin_used = (entry * volume) / leverage
+                    else:
+                        margin_used = 0
+                position_size = margin_used * leverage
+                if entry == 0 or current_price == 0:
+                    continue
+                pl = (current_price - entry) * volume * leverage
+                pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
+                positions_html += (
+                    f"<tr><td>{symbol}</td>"
+                    f"<td>{volume:.6f}</td>"
+                    f"<td>${entry:.2f}</td>"
+                    f"<td>${current_price:.2f}</td>"
+                    f"<td>{leverage}x</td>"
+                    f"<td>${margin_used:.2f}</td>"
+                    f"<td>${position_size:.2f}</td>"
+                    f"<td class='{pl_class}'>{pl:+.2f}</td></tr>"
+                )
+        if not positions_html:
+            positions_html = "<tr><td colspan='8'>No open positions</td></tr>"
+
+        trade_log_html = ""
+        for log in reversed(account.get("trade_log", [])):
+            profit = log.get("profit")
+            pl_pct = log.get("pl_pct")
+            profit_class = "profit" if profit is not None and profit > 0 else "loss" if profit is not None and profit < 0 else ""
+            leverage = log.get("leverage", "")
+            avg_entry = log.get("avg_entry", "")
+            trade_log_html += (
+                f"<tr><td>{log.get('timestamp')}</td>"
+                f"<td>{log.get('action')}</td>"
+                f"<td>{log.get('symbol')}</td>"
+                f"<td>{log.get('reason')}</td>"
+                f"<td>${log.get('price', 0):.2f}</td>"
+                f"<td>{log.get('amount', 0):.6f}</td>"
+                f"<td class='{profit_class}'>{(profit if profit is not None else '')}</td>"
+                f"<td class='{profit_class}'>{(pl_pct if pl_pct is not None else '')}</td>"
+                f"<td>${log.get('balance', 0):.2f}</td>"
+                f"<td>{leverage}</td>"
+                f"<td>{avg_entry:.2f}" if avg_entry not in ("", None) else "<td></td>"
+                f"</tr>"
+            )
+        if not trade_log_html:
+            trade_log_html = "<tr><td colspan='11'>No trades yet</td></tr>"
+
+        dashboards[bot_id] = dict(
+            bot=bot_cfg,
+            account=account,
+            equity=equity,
+            available_cash=available_cash,
+            total_pl=total_pl,
+            coin_stats_html=coin_stats_html,
+            positions_html=positions_html,
+            trade_log_html=trade_log_html
         )
-    if not trade_log_html:
-        trade_log_html = "<tr><td colspan='11'>No trades yet</td></tr>"
 
-    # --- Dashboard HTML with Sidebar ---
-    html = """
+    html = '''
+    <!DOCTYPE html>
     <html>
     <head>
         <title>CoinBot Dashboard</title>
-        <link href="https://fonts.googleapis.com/css?family=Montserrat:700,400&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
         <style>
-            body {
-                font-family: 'Montserrat', Arial, sans-serif;
-                background: linear-gradient(135deg, #23253a 0%, #1c1e2e 100%);
-                color: #ffe082;
-                margin: 0; padding: 0;
-            }
-            .container-flex {
-                display: flex;
-                justify-content: center;
-                align-items: flex-start;
-                gap: 36px;
-                margin: 40px auto;
-                max-width: 1500px;
-                width: 100%;
-            }
-            .dashboard-card {
-                background: #232733;
-                border-radius: 18px;
-                box-shadow: 0 8px 32px rgba(0,0,0,0.24);
-                padding: 28px 18px 22px 18px;
-                width: 950px;
-                border: 2px solid #ffe08244;
-            }
-            .sidebar-card {
-                background: #191a25;
-                border-radius: 14px;
-                padding: 22px 12px 18px 12px;
-                min-width: 210px;
-                border: 2px solid #ffe08233;
-                margin-top: 0;
-                height: fit-content;
-            }
-            h1 {
-                color: #ffe082;
-                font-size: 2.2em;
-                margin-bottom: 10px;
-                text-shadow: 1px 2px 10px #0008;
-                text-align: center;
-            }
-            h2 {
-                color: #ffe082;
-                font-size: 1.2em;
-                margin-top: 26px;
-                margin-bottom: 10px;
-                letter-spacing: 1px;
-            }
-            .total-pl {
-                font-size: 1.6em;
-                font-weight: 700;
-                margin: 18px 0 16px 0;
-                display: inline-block;
-                border-radius: 16px;
-                padding: 10px 28px;
-                background: #15171f;
-                border: 2px solid #ffe08260;
-                box-shadow: 0 3px 12px #0003;
+            .bot-tab.active { font-weight: bold; }
+            .bot-panel {
+                border-radius: 10px; padding: 18px; margin-top: 18px;
             }
             .profit { color: #2fdc8b; font-weight: bold;}
             .loss { color: #ff4b57; font-weight: bold;}
-            table {
-                border-collapse: separate;
-                border-spacing: 0;
-                width: 100%;
-                margin-bottom: 28px;
-                background: #232733;
-                border-radius: 15px;
-                overflow: hidden;
-                box-shadow: 0 2px 10px #0003;
-            }
-            th, td {
-                padding: 10px 7px;
-                text-align: center;
-                border-bottom: 1px solid #35395b;
-            }
-            th {
-                background: #22253c;
-                color: #ffe082;
-                font-size: 1.04em;
-                letter-spacing: 1px;
-            }
-            tr:nth-child(even) { background: #232733; }
-            tr:nth-child(odd) { background: #282b40; }
-            tr:last-child td { border-bottom: none; }
-            .sidebar-card h3 {
-                color: #ffe082;
-                font-size: 1.08em;
-                margin-bottom: 10px;
-                text-align: center;
-                font-weight: 700;
-            }
-            .sidebar-table {
-                background: #181a2c;
-                width: 100%;
-                border-radius: 9px;
-                box-shadow: 0 2px 7px #0002;
-                margin-top: 8px;
-            }
-            .sidebar-table th, .sidebar-table td {
-                padding: 7px 6px;
-                font-size: 1em;
-                border-bottom: 1px solid #2b2d46;
-            }
-            .sidebar-table th {
-                background: #191a25;
-                color: #ffe082;
-            }
-            .sidebar-table tr:last-child td { border-bottom: none; }
-            .footer { text-align: right; color: #aaa; font-size: 0.95em; margin-top: 30px; }
-            @media (max-width: 1200px) {
-                .container-flex { flex-direction: column; align-items: stretch; }
-                .dashboard-card { width: 100vw; min-width: 0; }
-                .sidebar-card { min-width: 0; margin-top: 16px;}
-            }
         </style>
     </head>
     <body>
-        <div class="container-flex">
-            <div class="dashboard-card">
-                <h1>CoinBot Dashboard</h1>
-                <h2>
-                    Account Balance (Equity): <span>${{ equity|round(2) }}</span><br>
-                    Available Cash: <span>${{ available_cash|round(2) }}</span>
-                </h2>
-                <div class="total-pl {{ 'profit' if total_pl > 0 else 'loss' if total_pl < 0 else '' }}">
-                    Total P/L: ${{ '{0:.2f}'.format(total_pl) }}
-                </div>
-                <h2>Open Positions</h2>
-                <table>
-                    <tr>
-                        <th>Symbol</th>
-                        <th>Volume</th>
-                        <th>Entry Price</th>
-                        <th>Current Price</th>
-                        <th>Leverage</th>
-                        <th>Margin Used</th>
-                        <th>Position Size</th>
-                        <th>Unrealized P/L</th>
-                    </tr>
-                    {{ positions_html|safe }}
-                </table>
-                <h2>Trade Log</h2>
-                <table>
-                    <tr>
-                        <th>Time</th>
-                        <th>Action</th>
-                        <th>Symbol</th>
-                        <th>Reason</th>
-                        <th>Price</th>
-                        <th>Amount</th>
-                        <th>Profit</th>
-                        <th>P/L %</th>
-                        <th>Balance</th>
-                        <th>Leverage</th>
-                        <th>Avg Entry</th>
-                    </tr>
-                    {{ trade_log_html|safe }}
-                </table>
-                <div class="footer">
-                    Updated: {{ now }}
+    <div class="container mt-4">
+        <h1 class="mb-4">CoinBot Dashboard</h1>
+        <ul class="nav nav-tabs" id="botTabs" role="tablist">
+            {% for bot_id, bot_data in dashboards.items() %}
+            <li class="nav-item" role="presentation">
+                <a class="nav-link {% if active == bot_id %}active{% endif %} bot-tab"
+                   href="{{ url_for('dashboard', active=bot_id) }}"
+                   style="color: {{ bot_data['bot']['color'] }};"
+                   >{{ bot_data["bot"]["name"] }}</a>
+            </li>
+            {% endfor %}
+        </ul>
+        <div class="tab-content">
+            {% for bot_id, bot_data in dashboards.items() %}
+            <div class="tab-pane fade {% if active == bot_id %}show active{% endif %}" id="bot{{ bot_id }}">
+                <div class="bot-panel" style="background-color: {{ bot_data['bot']['color'] }}15;">
+                    <h3 style="color: {{ bot_data['bot']['color'] }};">{{ bot_data['bot']["name"] }}</h3>
+                    <h5>Balance: ${{ bot_data['account']['balance']|round(2) }} | Equity: ${{ bot_data['equity']|round(2) }}</h5>
+                    <h6>Total P/L: <span class="{% if bot_data['total_pl'] > 0 %}profit{% elif bot_data['total_pl'] < 0 %}loss{% endif %}">${{ '{0:.2f}'.format(bot_data['total_pl']) }}</span></h6>
+                    <h5>Open Positions</h5>
+                    <table class="table table-sm table-striped">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Volume</th>
+                                <th>Entry Price</th>
+                                <th>Current Price</th>
+                                <th>Leverage</th>
+                                <th>Margin Used</th>
+                                <th>Position Size</th>
+                                <th>Unrealized P/L</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {{ bot_data['positions_html']|safe }}
+                        </tbody>
+                    </table>
+                    <h5>Trade Log</h5>
+                    <table class="table table-sm table-striped">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Action</th>
+                                <th>Symbol</th>
+                                <th>Reason</th>
+                                <th>Price</th>
+                                <th>Amount</th>
+                                <th>Profit</th>
+                                <th>P/L %</th>
+                                <th>Balance</th>
+                                <th>Leverage</th>
+                                <th>Avg Entry</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {{ bot_data['trade_log_html']|safe }}
+                        </tbody>
+                    </table>
+                    <h5>Coin P/L Summary</h5>
+                    <table class="table table-sm">
+                        <tr><th>Coin</th><th>Total P/L</th></tr>
+                        {{ bot_data['coin_stats_html']|safe }}
+                    </table>
                 </div>
             </div>
-            <div class="sidebar-card">
-                <h3>Coin P/L Summary</h3>
-                <table class="sidebar-table">
-                    <tr><th>Coin</th><th>Total P/L</th></tr>
-                    {{ coin_stats_html|safe }}
-                </table>
-            </div>
+            {% endfor %}
         </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     </body>
     </html>
-    """
-
-    return render_template_string(
-        html,
-        balance=account.get("balance", 0),
-        equity=equity,
-        available_cash=available_cash,
-        positions_html=positions_html,
-        trade_log_html=trade_log_html,
-        now=pretty_now(),
-        total_pl=total_pl,
-        coin_stats_html=coin_stats_html,
-    )
-
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({"status": "ok", "time": pretty_now()}), 200
+    '''
+    return render_template_string(html, dashboards=dashboards, active=active)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    global account
+    data = request.get_json()
+    bot_raw = str(data.get("bot", "")).strip().lower()
+    if bot_raw.startswith("coinbot"):
+        bot_id = bot_raw.replace("coinbot", "").replace(" ", "")
+    else:
+        bot_id = bot_raw
+    if bot_id not in BOTS:
+        logger.warning(f"Unknown bot_id in webhook: {bot_id}")
+        return jsonify({"status": "error", "message": "Unknown bot"}), 400
 
-    client_ip = request.remote_addr
-    logger.info(f"Webhook received from {client_ip}")
-
+    account = load_account(bot_id)
     try:
-        if not request.data:
-            logger.warning("Empty webhook payload")
-            return jsonify({"status": "error", "message": "Empty payload"}), 400
-
-        data = request.get_json()
-        if not data:
-            logger.warning("Invalid JSON payload")
-            return jsonify({"status": "error", "message": "Invalid JSON"}), 400
-
         action = data.get("action", "").lower()
         symbol = data.get("symbol", "").upper()
-
         if not action or action not in ["buy", "sell"]:
-            logger.warning(f"Invalid action: {action}")
             return jsonify({"status": "error", "message": "Invalid action"}), 400
-
         if not symbol:
-            logger.warning("Missing symbol")
             return jsonify({"status": "error", "message": "Missing symbol"}), 400
-
         try:
             price = float(data.get("price", 0))
             if price <= 0:
                 raise ValueError("Invalid price")
         except:
-            logger.warning(f"Invalid price: {data.get('price')}")
             return jsonify({"status": "error", "message": "Invalid price"}), 400
-
         reason = data.get("reason", "TradingView signal")
         timestamp = pretty_now()
         leverage = 5
@@ -471,8 +380,7 @@ def webhook():
                         "balance": round(account["balance"], 2),
                         "leverage": leverage,
                     })
-                    save_account()
-                    logger.info(f"BUY: {volume} {symbol} @ ${price} | Margin used: ${margin_used:.2f} | Position size: ${position_size:.2f}")
+                    save_account(bot_id, account)
                     return jsonify({
                         "status": "success",
                         "action": "buy",
@@ -481,13 +389,11 @@ def webhook():
                         "volume": volume
                     }), 200
                 else:
-                    logger.warning(f"Insufficient balance for {symbol} buy")
                     return jsonify({
                         "status": "error",
                         "message": "Insufficient balance"
                     }), 400
             else:
-                logger.warning(f"Position limit reached for {symbol} or invalid volume")
                 return jsonify({
                     "status": "error",
                     "message": "Position limit reached or invalid volume"
@@ -497,7 +403,6 @@ def webhook():
             poslist = account["positions"].get(symbol, [])
             if poslist:
                 total_volume = sum(p["volume"] for p in poslist)
-                # Robust margin_used sum for old and new positions
                 total_margin = 0
                 for p in poslist:
                     mu = p.get("margin_used")
@@ -532,8 +437,7 @@ def webhook():
                     "avg_entry": avg_entry,
                 })
                 account["positions"][symbol] = []
-                save_account()
-                logger.info(f"SELL: {total_volume} {symbol} @ ${price} | Profit: ${profit:.2f}")
+                save_account(bot_id, account)
                 return jsonify({
                     "status": "success",
                     "action": "sell",
@@ -544,7 +448,6 @@ def webhook():
                     "return_pct": pl_pct
                 }), 200
             else:
-                logger.warning(f"No positions to sell for {symbol}")
                 return jsonify({
                     "status": "error",
                     "message": "No positions to sell"
