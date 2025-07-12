@@ -24,21 +24,20 @@ app.secret_key = "supersecretkey"
 STARTING_BALANCE = 1000.00
 file_lock = threading.Lock()
 
-# --- Per-bot config ---
 BOTS = {
     "1.0": {
         "name": "Coinbot 1.0",
-        "color": "#2196f3",
+        "color": "#06D1BF",
         "data_file": "account_1.json"
     },
     "2.0": {
         "name": "Coinbot 2.0",
-        "color": "#4caf50",
+        "color": "#FACB39",
         "data_file": "account_2.json"
     },
     "3.0": {
         "name": "Coinbot 3.0",
-        "color": "#f44336",
+        "color": "#FF4B57",
         "data_file": "account_3.json"
     }
 }
@@ -235,17 +234,100 @@ def dashboard():
         <title>CoinBot Dashboard</title>
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
         <style>
-            .bot-tab.active { font-weight: bold; }
-            .bot-panel {
-                border-radius: 10px; padding: 18px; margin-top: 18px;
+            body {
+                background: linear-gradient(120deg,#1a1d28 0%, #131520 100%);
+                font-family: 'Segoe UI', 'Roboto', 'Montserrat', Arial, sans-serif;
+                color: #e2e2e2;
             }
-            .profit { color: #2fdc8b; font-weight: bold;}
-            .loss { color: #ff4b57; font-weight: bold;}
+            .header-logo {
+                height: 44px;
+                margin-right: 18px;
+                vertical-align: middle;
+            }
+            .header-title {
+                font-size: 2.4em;
+                font-weight: bold;
+                letter-spacing: 2px;
+                color: #FFF;
+                display: inline-block;
+                vertical-align: middle;
+                text-shadow: 0 3px 15px #000A, 0 1px 0 #e5b500a0;
+            }
+            .nav-tabs .nav-link {
+                font-size: 1.2em;
+                font-weight: 600;
+                background: #222431;
+                border: none;
+                color: #AAA;
+                border-radius: 0;
+                margin-right: 2px;
+                transition: background 0.2s, color 0.2s;
+            }
+            .nav-tabs .nav-link.active, .nav-tabs .nav-link:hover {
+                background: linear-gradient(90deg, #232f43 60%, #232d3a 100%);
+                color: #ffe082 !important;
+                border-bottom: 3px solid #ffe082;
+            }
+            .bot-panel {
+                background: rgba(27,29,39,0.93);
+                border-radius: 18px;
+                padding: 24px 18px;
+                margin-top: 28px;
+                box-shadow: 0 6px 32px #0009, 0 1.5px 6px #0003;
+                border: 1.5px solid #33395b88;
+                position: relative;
+            }
+            .bot-panel h3 {
+                font-weight: bold;
+                font-size: 2em;
+                letter-spacing: 1px;
+            }
+            .bot-panel h5, .bot-panel h6 {
+                color: #ccc;
+            }
+            .profit { color: #18e198; font-weight: bold;}
+            .loss { color: #fd4561; font-weight: bold;}
+            table {
+                background: rgba(19,21,32,0.92);
+                border-radius: 13px;
+                overflow: hidden;
+                margin-bottom: 22px;
+                box-shadow: 0 2px 16px #0003;
+            }
+            th, td {
+                padding: 10px 7px;
+                text-align: center;
+                border-bottom: 1px solid #24273a;
+            }
+            th {
+                background: #25273a;
+                color: #ffe082;
+                font-size: 1.04em;
+            }
+            tr:last-child td { border-bottom: none; }
+            .table-sm th, .table-sm td { font-size: 0.98em; }
+            .tab-content { margin-top: 0; }
+            .footer {
+                margin-top: 24px; font-size: 0.99em; color: #888;
+                text-align: right;
+            }
+            @media (max-width: 1200px) {
+                .container { max-width: 99vw;}
+            }
         </style>
     </head>
     <body>
     <div class="container mt-4">
-        <h1 class="mb-4">CoinBot Dashboard</h1>
+        <div class="mb-4 d-flex align-items-center">
+            <svg class="header-logo" viewBox="0 0 50 50" fill="none">
+                <circle cx="25" cy="25" r="25" fill="#23252e"/>
+                <g>
+                  <circle cx="25" cy="25" r="19.5" fill="#F7931A"/>
+                  <text x="15" y="33" font-size="22" font-family="Arial" font-weight="bold" fill="#fff">₿</text>
+                </g>
+            </svg>
+            <span class="header-title">CoinBot Dashboard</span>
+        </div>
         <ul class="nav nav-tabs" id="botTabs" role="tablist">
             {% for bot_id, bot_data in dashboards.items() %}
             <li class="nav-item" role="presentation">
@@ -259,11 +341,13 @@ def dashboard():
         <div class="tab-content">
             {% for bot_id, bot_data in dashboards.items() %}
             <div class="tab-pane fade {% if active == bot_id %}show active{% endif %}" id="bot{{ bot_id }}">
-                <div class="bot-panel" style="background-color: {{ bot_data['bot']['color'] }}15;">
+                <div class="bot-panel" style="box-shadow: 0 2px 12px {{ bot_data['bot']['color'] }}33;">
                     <h3 style="color: {{ bot_data['bot']['color'] }};">{{ bot_data['bot']["name"] }}</h3>
-                    <h5>Balance: ${{ bot_data['account']['balance']|round(2) }} | Equity: ${{ bot_data['equity']|round(2) }}</h5>
+                    <h5>Balance: <span style="color:{{ bot_data['bot']['color'] }};">${{ bot_data['account']['balance']|round(2) }}</span>
+                        | Equity: <span style="color:{{ bot_data['bot']['color'] }};">${{ bot_data['equity']|round(2) }}</span>
+                    </h5>
                     <h6>Total P/L: <span class="{% if bot_data['total_pl'] > 0 %}profit{% elif bot_data['total_pl'] < 0 %}loss{% endif %}">${{ '{0:.2f}'.format(bot_data['total_pl']) }}</span></h6>
-                    <h5>Open Positions</h5>
+                    <h5 class="mt-4 mb-2">Open Positions</h5>
                     <table class="table table-sm table-striped">
                         <thead>
                             <tr>
@@ -281,7 +365,7 @@ def dashboard():
                         {{ bot_data['positions_html']|safe }}
                         </tbody>
                     </table>
-                    <h5>Trade Log</h5>
+                    <h5 class="mt-4 mb-2">Trade Log</h5>
                     <table class="table table-sm table-striped">
                         <thead>
                             <tr>
@@ -302,7 +386,7 @@ def dashboard():
                         {{ bot_data['trade_log_html']|safe }}
                         </tbody>
                     </table>
-                    <h5>Coin P/L Summary</h5>
+                    <h5 class="mt-4 mb-2">Coin P/L Summary</h5>
                     <table class="table table-sm">
                         <tr><th>Coin</th><th>Total P/L</th></tr>
                         {{ bot_data['coin_stats_html']|safe }}
@@ -311,12 +395,15 @@ def dashboard():
             </div>
             {% endfor %}
         </div>
+        <div class="footer">
+            Updated: {{now}}
+        </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     </body>
     </html>
     '''
-    return render_template_string(html, dashboards=dashboards, active=active)
+    return render_template_string(html, dashboards=dashboards, active=active, now=pretty_now())
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
