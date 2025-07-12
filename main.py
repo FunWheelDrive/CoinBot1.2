@@ -137,15 +137,15 @@ def dashboard():
     if not coin_stats_html:
         coin_stats_html = "<tr><td colspan='2'>No trades yet</td></tr>"
 
-    # --- Build Positions Table Rows (with leverage) ---
+    # --- Build Positions Table Rows (with leverage and position size) ---
     positions_html = ""
     for symbol, positions in account.get("positions", {}).items():
         current_price = prices.get(symbol, 0)
         for p in positions:
             entry = p.get("entry_price", 0)
             volume = p.get("volume", 0)
-            usd_spent = p.get("usd_spent", 0)
             leverage = p.get("leverage", 1)
+            position_size = entry * volume * leverage if entry and volume else 0
             pl = (current_price - entry) * volume * leverage if current_price and entry else 0
             pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
             positions_html += (
@@ -154,7 +154,7 @@ def dashboard():
                 f"<td>${entry:.2f}</td>"
                 f"<td>${current_price:.2f}</td>"
                 f"<td>{leverage}x</td>"
-                f"<td>${usd_spent:.2f}</td>"
+                f"<td>${position_size:.2f}</td>"
                 f"<td class='{pl_class}'>{pl:+.2f}</td></tr>"
             )
     if not positions_html:
@@ -326,7 +326,7 @@ def dashboard():
                         <th>Entry Price</th>
                         <th>Current Price</th>
                         <th>Leverage</th>
-                        <th>USD Spent</th>
+                        <th>Position Size</th>
                         <th>Unrealized P/L</th>
                     </tr>
                     {{ positions_html|safe }}
