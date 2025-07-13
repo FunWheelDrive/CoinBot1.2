@@ -94,49 +94,54 @@ def load_account(bot_id):
 def pretty_now():
     return datetime.now(ZoneInfo("America/Edmonton")).strftime('%Y-%m-%d %H:%M:%S %Z')
 
-symbol_map = {
-    'BTCUSDT': 'bitcoin',
-    'ETHUSDT': 'ethereum',
-    'SOLUSDT': 'solana',
-    'DOGEUSDT': 'dogecoin',
-    'AVAXUSDT': 'avalanche-2',
-    'MATICUSDT': 'matic-network',
-    'ADAUSDT': 'cardano',
-    'LTCUSDT': 'litecoin',
-    'DOTUSDT': 'polkadot',
-    'PEPEUSDT': 'pepe',
+# --- Kraken symbol mapping ---
+# Add new pairs as needed, format: 'SYMBOL' : 'KRAKEN_PAIR'
+kraken_pairs = {
+    "BTCUSDT": "XBTUSDT",
+    "ETHUSDT": "ETHUSDT",
+    "SOLUSDT": "SOLUSDT",
+    "DOGEUSDT": "DOGEUSDT",
+    "AVAXUSDT": "AVAXUSDT",
+    "MATICUSDT": "MATICUSDT",
+    "ADAUSDT": "ADAUSDT",
+    "LTCUSDT": "LTCUSDT",
+    "DOTUSDT": "DOTUSDT",
+    "PEPEUSDT": "PEPEUSDT",
 }
 
 latest_prices = {}
 last_price_update = {'time': pretty_now(), 'prev_time': pretty_now()}
 
 def fetch_latest_prices(symbols):
-    cg_ids = [symbol_map[sym] for sym in symbols if sym in symbol_map]
-    if not cg_ids:
+    """Fetch prices from Kraken public API for all needed pairs. Caches last good price on error."""
+    symbols_to_fetch = [sym for sym in symbols if sym in kraken_pairs]
+    if not symbols_to_fetch:
         return latest_prices.copy()
-
-    try:
-        url = f"https://api.coingecko.com/api/v3/simple/price?ids={','.join(cg_ids)}&vs_currencies=usd"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        prices = {}
-        data = response.json()
-        for sym, cg_id in symbol_map.items():
-            if cg_id in data and "usd" in data[cg_id]:
-                prices[sym] = float(data[cg_id]["usd"])
-        if prices:  # Only update if data is non-empty!
-            latest_prices.update(prices)
-            # Only update time if we got a successful, non-empty response!
-            prev_time = last_price_update['time']
-            last_price_update['prev_time'] = prev_time
-            last_price_update['time'] = pretty_now()
-            logger.info(f"Fetched prices for {len(prices)} symbols at {last_price_update['time']}")
-        else:
-            logger.warning("API call succeeded but returned no prices, keeping previous prices")
-        return latest_prices.copy()
-    except Exception as e:
-        logger.error(f"Price fetch failed: {str(e)}. Keeping last known prices.")
-        return latest_prices.copy()
+    prices = {}
+    got_one = False
+    for sym in symbols_to_fetch:
+        pair = kraken_pairs[sym]
+        url = f"https://api.kraken.com/0/public/Ticker?pair={pair}"
+        try:
+            resp = requests.get(url, timeout=10)
+            data = resp.json()
+            # 'result' key contains dict with pairname as key
+            if 'result' in data and data['result']:
+                result = list(data['result'].values())[0]
+                last = float(result['c'][0])
+                prices[sym] = last
+                got_one = True
+        except Exception as e:
+            logger.warning(f"Error fetching {sym} from Kraken: {e}")
+    if got_one:
+        latest_prices.update(prices)
+        prev_time = last_price_update['time']
+        last_price_update['prev_time'] = prev_time
+        last_price_update['time'] = pretty_now()
+        logger.info(f"Fetched Kraken prices at {last_price_update['time']} for: {', '.join(prices.keys())}")
+    else:
+        logger.warning("Kraken API returned no prices, using previous prices")
+    return latest_prices.copy()
 
 def get_kraken_price(symbol):
     return latest_prices.get(symbol, 0)
@@ -526,6 +531,7 @@ if __name__ == '__main__':
         logger.info(f"Created data directory: {DATA_DIR}")
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
+
 
 
 
