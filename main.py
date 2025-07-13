@@ -234,7 +234,7 @@ def dashboard():
                 f"<td class='{pl_class}'>{log.get('pl_pct', '')}</td>"
                 f"<td>${float(log.get('balance', 0)):.2f}</td>"
                 f"<td>{log.get('leverage', '')}</td>"
-                f"<td>{f'{float(log.get('avg_entry', 0)):.2f}' if log.get('avg_entry') not in (None, '') else ''}</td>"
+                f"<td>{f'{float(log.get(\"avg_entry\", 0)):.2f}' if log.get(\"avg_entry\") not in (None, '') else ''}</td>"
                 f"</tr>"
             )
         
@@ -529,7 +529,7 @@ def webhook():
             # Calculate position metrics
             total_volume = sum(float(p["volume"]) for p in positions)
             total_margin = sum(
-                float(p.get("margin_used", (float(p.get("entry_price", 0)) * float(p.get("volume", 0)) / float(p.get("leverage", 1))))
+                float(p.get("margin_used", (float(p.get("entry_price", 0)) * float(p.get("volume", 0)) / float(p.get("leverage", 1)))))
                 for p in positions
             )
             avg_entry = sum(float(p["entry_price"]) * float(p["volume"]) for p in positions) / total_volume if total_volume > 0 else 0
@@ -575,5 +575,6 @@ if __name__ == '__main__':
     
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
+
 
 
