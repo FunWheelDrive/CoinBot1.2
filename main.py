@@ -94,8 +94,6 @@ def load_account(bot_id):
 def pretty_now():
     return datetime.now(ZoneInfo("America/Edmonton")).strftime('%Y-%m-%d %H:%M:%S %Z')
 
-# --- Kraken symbol mapping ---
-# Add new pairs as needed, format: 'SYMBOL' : 'KRAKEN_PAIR'
 kraken_pairs = {
     "BTCUSDT": "XBTUSDT",
     "ETHUSDT": "ETHUSDT",
@@ -113,7 +111,6 @@ latest_prices = {}
 last_price_update = {'time': pretty_now(), 'prev_time': pretty_now()}
 
 def fetch_latest_prices(symbols):
-    """Fetch prices from Kraken public API for all needed pairs. Caches last good price on error."""
     symbols_to_fetch = [sym for sym in symbols if sym in kraken_pairs]
     if not symbols_to_fetch:
         return latest_prices.copy()
@@ -125,7 +122,6 @@ def fetch_latest_prices(symbols):
         try:
             resp = requests.get(url, timeout=10)
             data = resp.json()
-            # 'result' key contains dict with pairname as key
             if 'result' in data and data['result']:
                 result = list(data['result'].values())[0]
                 last = float(result['c'][0])
@@ -380,7 +376,6 @@ def dashboard():
                 <span style="color:#F7931A; font-weight:bold; font-size:1.32em; letter-spacing:1px;">{{ btc_price }}</span>
             </span>
         </div>
-        <!-- ... rest of your HTML as before ... -->
         <ul class="nav nav-tabs" id="botTabs" role="tablist">
             {% for bot_id, bot_data in dashboards.items() %}
             <li class="nav-item" role="presentation">
@@ -468,8 +463,105 @@ def dashboard():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    # Insert your webhook logic here, or paste your previous webhook function
-    return jsonify({"status": "success", "message": "Webhook not yet implemented"}), 200
+    try:
+        data = request.get_json()
+        logger.info(f"Webhook received: {data}")
+
+        # Bot selection
+        bot_raw = str(data.get("bot", "")).strip().lower()
+        bot_id = bot_raw.replace("coinbot", "").replace(" ", "") if bot_raw.startswith("coinbot") else bot_raw
+        if bot_id not in BOTS:
+            return jsonify({"status": "error", "message": f"Unknown bot: {bot_id}"}), 400
+
+        action = str(data.get("action", "")).lower()
+        if action not in ["buy", "sell"]:
+            return jsonify({"status": "error", "message": f"Invalid action: {action}"}), 400
+
+        symbol = str(data.get("symbol", "")).upper()
+        if not symbol:
+            return jsonify({"status": "error", "message": "Missing symbol"}), 400
+
+        # Get live price from Kraken
+        price = get_kraken_price(symbol)
+        if not price or price <= 0:
+            return jsonify({"status": "error", "message": f"No live Kraken price for {symbol}"}), 400
+
+        account = load_account(bot_id)
+        timestamp = pretty_now()
+        leverage = 5  # Or set as desired
+        margin_pct = 0.05  # 5% per trade
+
+        # Optional: get volume from webhook (else auto-calc)
+        volume = float(data.get("volume", 0))
+        reason = data.get("reason", "TradingView signal")
+
+        if action == "buy":
+            margin_used = account["balance"] * margin_pct
+            if not volume or volume <= 0:
+                volume = round((margin_used * leverage) / price, 6)
+            if account["balance"] < margin_used:
+                return jsonify({"status": "error", "message": "Insufficient balance"}), 400
+            if len(account["positions"].get(symbol, [])) >= 5:
+                return jsonify({"status": "error", "message": "Position limit reached"}), 400
+
+            new_position = {
+                "volume": volume,
+                "entry_price": price,
+                "timestamp": timestamp,
+                "margin_used": margin_used,
+                "leverage": leverage,
+            }
+            account["positions"].setdefault(symbol, []).append(new_position)
+            account["balance"] -= margin_used
+            account["trade_log"].append({
+                "timestamp": timestamp,
+                "action": "buy",
+                "symbol": symbol,
+                "reason": reason,
+                "price": price,
+                "amount": volume,
+                "balance": round(account["balance"], 2),
+                "leverage": leverage,
+            })
+            save_account(bot_id, account)
+            logger.info(f"BUY executed for {symbol} at {price} (bot {bot_id})")
+            return jsonify({"status": "success", "action": "buy", "symbol": symbol, "price": price}), 200
+
+        elif action == "sell":
+            positions = account["positions"].get(symbol, [])
+            if not positions:
+                return jsonify({"status": "error", "message": "No positions to sell"}), 400
+            total_volume = sum(float(p["volume"]) for p in positions)
+            total_margin = sum(float(p.get("margin_used", (float(p.get("entry_price", 0)) * float(p.get("volume", 0)) / float(p.get("leverage", 1)))))
+                              for p in positions)
+            avg_entry = sum(float(p["entry_price"]) * float(p["volume"]) for p in positions) / total_volume if total_volume > 0 else 0
+            profit = (price - avg_entry) * total_volume * leverage
+            pl_pct = ((price - avg_entry) / avg_entry * leverage * 100) if avg_entry > 0 else 0
+
+            account["balance"] += total_margin + profit
+            account["positions"][symbol] = []  # Clear positions
+            account["trade_log"].append({
+                "timestamp": timestamp,
+                "action": "sell",
+                "symbol": symbol,
+                "reason": reason,
+                "price": price,
+                "amount": total_volume,
+                "profit": round(profit, 2),
+                "pl_pct": round(pl_pct, 2),
+                "balance": round(account["balance"], 2),
+                "leverage": leverage,
+                "avg_entry": round(avg_entry, 6),
+            })
+            save_account(bot_id, account)
+            logger.info(f"SELL executed for {symbol} at {price} (bot {bot_id})")
+            return jsonify({"status": "success", "action": "sell", "symbol": symbol, "price": price}), 200
+
+        return jsonify({"status": "error", "message": "Unhandled action"}), 400
+
+    except Exception as e:
+        logger.error(f"Webhook processing failed: {str(e)}", exc_info=True)
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
 
 def check_and_trigger_stop_losses():
     while True:
@@ -519,9 +611,8 @@ def check_and_trigger_stop_losses():
             account = load_account(bot_id)
             needed_symbols.update(account["positions"].keys())
         fetch_latest_prices(list(needed_symbols))
-        time.sleep(10)
+        time.sleep(60)  # Check every minute; lower if needed (e.g., 10s for faster)
 
-# Start stop loss thread on launch
 stop_loss_thread = threading.Thread(target=check_and_trigger_stop_losses, daemon=True)
 stop_loss_thread.start()
 
@@ -531,6 +622,7 @@ if __name__ == '__main__':
         logger.info(f"Created data directory: {DATA_DIR}")
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
+
 
 
 
