@@ -222,7 +222,9 @@ def dashboard():
         for log in reversed(account["trade_log"]):
             profit = log.get('profit')
             pl_class = "profit" if profit and profit > 0 else "loss" if profit and profit < 0 else ""
-            
+            avg_entry_val = log.get('avg_entry')
+            avg_entry_str = f"{float(avg_entry_val):.2f}" if avg_entry_val not in (None, '') else ''
+
             trade_log_html += (
                 f"<tr><td>{log.get('timestamp', '')}</td>"
                 f"<td>{log.get('action', '')}</td>"
@@ -234,7 +236,7 @@ def dashboard():
                 f"<td class='{pl_class}'>{log.get('pl_pct', '')}</td>"
                 f"<td>${float(log.get('balance', 0)):.2f}</td>"
                 f"<td>{log.get('leverage', '')}</td>"
-                f"<td>{f'{float(log.get(\"avg_entry\", 0)):.2f}' if log.get(\"avg_entry\") not in (None, '') else ''}</td>"
+                f"<td>{avg_entry_str}</td>"
                 f"</tr>"
             )
         
@@ -575,6 +577,7 @@ if __name__ == '__main__':
     
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
+
 
 
 
