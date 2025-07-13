@@ -5,7 +5,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
 import threading
+import time
 import logging
+import krakenex
+from dotenv import load_dotenv
 
 # --- Logging ---
 logging.basicConfig(
@@ -45,6 +48,12 @@ BOTS = {
         "data_file": os.path.join(DATA_DIR, "account_3.json")
     }
 }
+
+# --- Load Kraken API Keys ---
+load_dotenv(dotenv_path=".env")
+KRAKEN_API_KEY = os.getenv("KRAKEN_API_KEY")
+KRAKEN_API_SECRET = os.getenv("KRAKEN_API_SECRET")
+kraken_api = krakenex.API(key=KRAKEN_API_KEY, secret=KRAKEN_API_SECRET)
 
 def create_new_account():
     return {
@@ -103,41 +112,71 @@ def load_account(bot_id):
 def pretty_now():
     return datetime.now(ZoneInfo("America/Edmonton")).strftime('%Y-%m-%d %H:%M:%S %Z')
 
-def fetch_latest_prices(symbols):
+# --- Kraken price fetch ---
+def get_kraken_price(symbol):
     symbol_map = {
-        'BTCUSDT': 'bitcoin',
-        'ETHUSDT': 'ethereum',
-        'SOLUSDT': 'solana',
-        'DOGEUSDT': 'dogecoin',
-        'AVAXUSDT': 'avalanche-2',
-        'MATICUSDT': 'matic-network',
-        'ADAUSDT': 'cardano',
-        'LTCUSDT': 'litecoin',
-        'DOTUSDT': 'polkadot',
-        'PEPEUSDT': 'pepe',
+        "BTCUSDT": "XXBTZUSD",
+        "ETHUSDT": "XETHZUSD",
+        "SOLUSDT": "SOLUSD",
+        "DOGEUSDT": "XDGUSD",
+        "AVAXUSDT": "AVAXUSD",
+        "MATICUSDT": "MATICUSD",
+        "ADAUSDT": "ADAUSD",
+        "LTCUSDT": "XLTCZUSD",
+        "DOTUSDT": "DOTUSD",
+        "PEPEUSDT": "PEPEUSD",
     }
-    
-    cg_ids = [symbol_map[sym] for sym in symbols if sym in symbol_map]
-    if not cg_ids:
-        return {}
-
+    kraken_pair = symbol_map.get(symbol)
+    if not kraken_pair:
+        logger.error(f"No Kraken symbol mapping for {symbol}")
+        return None
     try:
-        url = f"https://api.coingecko.com/api/v3/simple/price?ids={','.join(cg_ids)}&vs_currencies=usd"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        
-        prices = {}
-        data = response.json()
-        for sym, cg_id in symbol_map.items():
-            if cg_id in data and "usd" in data[cg_id]:
-                prices[sym] = float(data[cg_id]["usd"])
-        
-        logger.info(f"Fetched prices for {len(prices)} symbols")
-        return prices
-        
+        resp = kraken_api.query_public('Ticker', {'pair': kraken_pair})
+        price = float(resp['result'][kraken_pair]['c'][0])
+        return price
     except Exception as e:
-        logger.error(f"Price fetch failed: {str(e)}")
-        return {}
+        logger.error(f"Failed to fetch price for {symbol} from Kraken: {str(e)}")
+        return None
+
+# --- Stop Loss Logic ---
+def check_and_trigger_stop_losses(bot_id, account):
+    updated = False
+    for symbol, positions in list(account["positions"].items()):
+        price = get_kraken_price(symbol)
+        if not price:
+            continue
+        for position in list(positions):
+            entry = float(position["entry_price"])
+            stop_loss_price = entry * 0.975  # 2.5% below entry
+            if price <= stop_loss_price:
+                leverage = position.get("leverage", 5)
+                volume = float(position["volume"])
+                margin_used = float(position.get("margin_used", 0))
+                profit = (price - entry) * volume * leverage
+                pl_pct = ((price - entry) / entry * leverage * 100) if entry > 0 else 0
+                timestamp = pretty_now()
+                avg_entry = entry
+                account["balance"] += margin_used + profit
+                # Clear position
+                account["positions"][symbol] = []
+                # Log stop loss
+                account["trade_log"].append({
+                    "timestamp": timestamp,
+                    "action": "sell",
+                    "symbol": symbol,
+                    "reason": "Stop Loss",
+                    "price": price,
+                    "amount": volume,
+                    "profit": round(profit, 2),
+                    "pl_pct": round(pl_pct, 2),
+                    "balance": round(account["balance"], 2),
+                    "leverage": leverage,
+                    "avg_entry": round(avg_entry, 2),
+                })
+                logger.info(f"Stop loss triggered for {symbol} at {price}")
+                updated = True
+    if updated:
+        save_account(bot_id, account)
 
 def calculate_position_stats(positions, prices):
     position_stats = []
@@ -187,10 +226,15 @@ def dashboard():
     dashboards = {}
     for bot_id, bot_cfg in BOTS.items():
         account = load_account(bot_id)
+        # check_and_trigger_stop_losses is now handled by background thread!
         
         # Get symbols from positions
         symbols = list(account["positions"].keys())
-        prices = fetch_latest_prices(symbols)
+        prices = {}
+        for sym in symbols:
+            kraken_price = get_kraken_price(sym)
+            if kraken_price is not None:
+                prices[sym] = kraken_price
         
         # Calculate equity and P/L
         equity = float(account["balance"])
@@ -267,182 +311,8 @@ def dashboard():
             'trade_log_html': trade_log_html
         }
 
-    html = '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>CoinBot Dashboard</title>
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
-        <style>
-            body {
-                background: linear-gradient(120deg,#1a1d28 0%, #131520 100%);
-                font-family: 'Segoe UI', 'Roboto', 'Montserrat', Arial, sans-serif;
-                color: #e2e2e2;
-            }
-            .header-logo {
-                height: 44px;
-                margin-right: 18px;
-                vertical-align: middle;
-            }
-            .header-title {
-                font-size: 2.4em;
-                font-weight: bold;
-                letter-spacing: 2px;
-                color: #FFF;
-                display: inline-block;
-                vertical-align: middle;
-                text-shadow: 0 3px 15px #000A, 0 1px 0 #e5b500a0;
-            }
-            .nav-tabs .nav-link {
-                font-size: 1.2em;
-                font-weight: 600;
-                background: #222431;
-                border: none;
-                color: #AAA;
-                border-radius: 0;
-                margin-right: 2px;
-                transition: background 0.2s, color 0.2s;
-            }
-            .nav-tabs .nav-link.active, .nav-tabs .nav-link:hover {
-                background: linear-gradient(90deg, #232f43 60%, #232d3a 100%);
-                color: #ffe082 !important;
-                border-bottom: 3px solid #ffe082;
-            }
-            .bot-panel {
-                background: rgba(27,29,39,0.93);
-                border-radius: 18px;
-                padding: 24px 18px;
-                margin-top: 28px;
-                box-shadow: 0 6px 32px #0009, 0 1.5px 6px #0003;
-                border: 1.5px solid #33395b88;
-                position: relative;
-            }
-            .bot-panel h3 {
-                font-weight: bold;
-                font-size: 2em;
-                letter-spacing: 1px;
-            }
-            .bot-panel h5, .bot-panel h6 {
-                color: #ccc;
-            }
-            .profit { color: #18e198; font-weight: bold;}
-            .loss { color: #fd4561; font-weight: bold;}
-            table {
-                background: rgba(19,21,32,0.92);
-                border-radius: 13px;
-                overflow: hidden;
-                margin-bottom: 22px;
-                box-shadow: 0 2px 16px #0003;
-            }
-            th, td {
-                padding: 10px 7px;
-                text-align: center;
-                border-bottom: 1px solid #24273a;
-            }
-            th {
-                background: #25273a;
-                color: #ffe082;
-                font-size: 1.04em;
-            }
-            tr:last-child td { border-bottom: none; }
-            .table-sm th, .table-sm td { font-size: 0.98em; }
-            .tab-content { margin-top: 0; }
-            .footer {
-                margin-top: 24px; font-size: 0.99em; color: #888;
-                text-align: right;
-            }
-            @media (max-width: 1200px) {
-                .container { max-width: 99vw;}
-            }
-        </style>
-    </head>
-    <body>
-    <div class="container mt-4">
-        <div class="mb-4 d-flex align-items-center">
-            <svg class="header-logo" viewBox="0 0 50 50" fill="none">
-                <circle cx="25" cy="25" r="25" fill="#23252e"/>
-                <g>
-                  <circle cx="25" cy="25" r="19.5" fill="#F7931A"/>
-                  <text x="15" y="33" font-size="22" font-family="Arial" font-weight="bold" fill="#fff">₿</text>
-                </g>
-            </svg>
-            <span class="header-title">CoinBot Dashboard</span>
-        </div>
-        <ul class="nav nav-tabs" id="botTabs" role="tablist">
-            {% for bot_id, bot_data in dashboards.items() %}
-            <li class="nav-item" role="presentation">
-                <a class="nav-link {% if active == bot_id %}active{% endif %} bot-tab"
-                   href="{{ url_for('dashboard', active=bot_id) }}"
-                   style="color: {{ bot_data['bot']['color'] }};"
-                   >{{ bot_data["bot"]["name"] }}</a>
-            </li>
-            {% endfor %}
-        </ul>
-        <div class="tab-content">
-            {% for bot_id, bot_data in dashboards.items() %}
-            <div class="tab-pane fade {% if active == bot_id %}show active{% endif %}" id="bot{{ bot_id }}">
-                <div class="bot-panel" style="box-shadow: 0 2px 12px {{ bot_data['bot']['color'] }}33;">
-                    <h3 style="color: {{ bot_data['bot']['color'] }};">{{ bot_data['bot']["name"] }}</h3>
-                    <h5>Balance: <span style="color:{{ bot_data['bot']['color'] }};">${{ bot_data['account']['balance']|round(2) }}</span>
-                        | Equity: <span style="color:{{ bot_data['bot']['color'] }};">${{ bot_data['equity']|round(2) }}</span>
-                    </h5>
-                    <h6>Total P/L: <span class="{% if bot_data['total_pl'] > 0 %}profit{% elif bot_data['total_pl'] < 0 %}loss{% endif %}">${{ '{0:.2f}'.format(bot_data['total_pl']) }}</span></h6>
-                    <h5 class="mt-4 mb-2">Open Positions</h5>
-                    <table class="table table-sm table-striped">
-                        <thead>
-                            <tr>
-                                <th>Symbol</th>
-                                <th>Volume</th>
-                                <th>Entry Price</th>
-                                <th>Current Price</th>
-                                <th>Leverage</th>
-                                <th>Margin Used</th>
-                                <th>Position Size</th>
-                                <th>Unrealized P/L</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                        {{ bot_data['positions_html']|safe }}
-                        </tbody>
-                    </table>
-                    <h5 class="mt-4 mb-2">Trade Log</h5>
-                    <table class="table table-sm table-striped">
-                        <thead>
-                            <tr>
-                                <th>Time</th>
-                                <th>Action</th>
-                                <th>Symbol</th>
-                                <th>Reason</th>
-                                <th>Price</th>
-                                <th>Amount</th>
-                                <th>Profit</th>
-                                <th>P/L %</th>
-                                <th>Balance</th>
-                                <th>Leverage</th>
-                                <th>Avg Entry</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                        {{ bot_data['trade_log_html']|safe }}
-                        </tbody>
-                    </table>
-                    <h5 class="mt-4 mb-2">Coin P/L Summary</h5>
-                    <table class="table table-sm">
-                        <tr><th>Coin</th><th>Total P/L</th></tr>
-                        {{ bot_data['coin_stats_html']|safe }}
-                    </table>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-        <div class="footer">
-            Updated: {{now}}
-        </div>
-    </div>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    </body>
-    </html>
-    '''
+    # -- KEEP YOUR EXISTING HTML TEMPLATE --
+    html = ''' ... (keep your full dashboard HTML as is, unchanged) ... '''
     return render_template_string(html, dashboards=dashboards, active=active_bot, now=pretty_now())
 
 @app.route('/webhook', methods=['POST'])
@@ -472,12 +342,10 @@ def webhook():
         if not symbol:
             return jsonify({"status": "error", "message": "Missing symbol"}), 400
 
-        try:
-            price = float(data.get("price", 0))
-            if price <= 0:
-                raise ValueError("Invalid price")
-        except (ValueError, TypeError):
-            return jsonify({"status": "error", "message": "Invalid price"}), 400
+        # --- USE LIVE KRAKEN PRICE! ---
+        price = get_kraken_price(symbol)
+        if not price or price <= 0:
+            return jsonify({"status": "error", "message": "Could not fetch live price from Kraken"}), 400
 
         # Process trade
         account = load_account(bot_id)
@@ -569,14 +437,30 @@ def webhook():
         logger.error(f"Webhook processing failed: {str(e)}", exc_info=True)
         return jsonify({"status": "error", "message": "Internal server error"}), 500
 
+# --- Background stop loss checker thread ---
+def stop_loss_background_worker(interval=60):  # 60 seconds (1 minute)
+    while True:
+        try:
+            logger.info("Background stop loss checker running...")
+            for bot_id in BOTS:
+                account = load_account(bot_id)
+                check_and_trigger_stop_losses(bot_id, account)
+        except Exception as e:
+            logger.error(f"Error in stop loss background worker: {e}", exc_info=True)
+        time.sleep(interval)
+
 if __name__ == '__main__':
-    # Check if data directory exists
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
         logger.info(f"Created data directory: {DATA_DIR}")
     
+    # Start background stop loss checker (every 60 seconds)
+    sl_thread = threading.Thread(target=stop_loss_background_worker, args=(60,), daemon=True)
+    sl_thread.start()
+
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
+
 
 
 
