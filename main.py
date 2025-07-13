@@ -519,7 +519,7 @@ def check_and_trigger_stop_losses():
             account = load_account(bot_id)
             needed_symbols.update(account["positions"].keys())
         fetch_latest_prices(list(needed_symbols))
-        time.sleep(60)
+        time.sleep(10)
 
 # Start stop loss thread on launch
 stop_loss_thread = threading.Thread(target=check_and_trigger_stop_losses, daemon=True)
