@@ -478,7 +478,6 @@ def dashboard():
         btc_price=get_bitcoin_price()
     )
 
-# --- WEBHOOK AND STOP LOSS LOGIC ---
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -499,15 +498,13 @@ def webhook():
         if not symbol:
             return jsonify({"status": "error", "message": "Missing symbol"}), 400
 
-# Get live price from Kraken
-price = get_kraken_price(symbol)
-if not price or price <= 0:
-    # Try to fetch latest price for this symbol right now
-    fetch_latest_prices([symbol])
-    price = get_kraken_price(symbol)
-    if not price or price <= 0:
-        return jsonify({"status": "error", "message": f"No live Kraken price for {symbol}"}), 400
-
+        # --- FIX: Fetch latest price on-demand if needed ---
+        price = get_kraken_price(symbol)
+        if not price or price <= 0:
+            fetch_latest_prices([symbol])
+            price = get_kraken_price(symbol)
+            if not price or price <= 0:
+                return jsonify({"status": "error", "message": f"No live Kraken price for {symbol}"}), 400
 
         account = load_account(bot_id)
         timestamp = pretty_now()
@@ -588,6 +585,7 @@ if not price or price <= 0:
     except Exception as e:
         logger.error(f"Webhook processing failed: {str(e)}", exc_info=True)
         return jsonify({"status": "error", "message": "Internal server error"}), 500
+
 
 # --- BACKGROUND STOP LOSS & PRICE CHECK THREAD ---
 def check_and_trigger_stop_losses():
