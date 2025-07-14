@@ -190,10 +190,16 @@ def dashboard():
     dashboards = {}
     prev_update_time = last_price_update.get('prev_time', last_price_update['time'])
 
+    # Always fetch BTC price for the dashboard header
+    fetch_latest_prices(['BTCUSDT'])
+
     for bot_id, bot_cfg in BOTS.items():
         account = load_account(bot_id)
         symbols = list(account["positions"].keys())
+
+        # Fetch prices for this bot's open symbols
         prices = fetch_latest_prices(symbols)
+
         equity = float(account["balance"])
         total_pl = 0
         positions_html = ""
