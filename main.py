@@ -111,7 +111,7 @@ kraken_pairs = {
     "ADAUSDT": "ADAUSDT",
     "LTCUSDT": "LTCUSDT",
     "DOTUSDT": "DOTUSDT",
-    "PEPEUSDT": "PEPEUSDT",
+    "PEPEUSD": "PEPEUSD",
 }
 
 latest_prices = {}
