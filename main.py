@@ -1,11 +1,4 @@
-
-
-
-
-
-
-
-from flask import Flask, request, render_template_string, jsonify
+from flask import Flask, request, render_template_string, jsonify, session, redirect, url_for, flash
 import json
 import requests
 from datetime import datetime
@@ -28,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key")
+
+# --- Password for settings page ---
+SETTINGS_PASSWORD = os.environ.get("SETTINGS_PASSWORD", "Bot")  # CHANGE for production!
 
 STARTING_BALANCE = 1000.00
 file_lock = threading.Lock()
@@ -98,6 +94,21 @@ def load_account(bot_id):
         logger.error(f"Error loading account {bot_id}: {str(e)}")
         return create_new_account()
 
+# --- Per-bot settings (leverage, stop loss %) ---
+
+def load_bot_settings(bot_id):
+    settings_file = os.path.join(DATA_DIR, f"settings_{bot_id}.json")
+    if not os.path.exists(settings_file):
+        # Default values
+        return {"leverage": 5, "stop_loss_pct": 2.5}
+    with open(settings_file, "r") as f:
+        return json.load(f)
+
+def save_bot_settings(bot_id, settings):
+    settings_file = os.path.join(DATA_DIR, f"settings_{bot_id}.json")
+    with open(settings_file, "w") as f:
+        json.dump(settings, f, indent=2)
+
 def pretty_now():
     return datetime.now(ZoneInfo("America/Edmonton")).strftime('%Y-%m-%d %H:%M:%S %Z')
 
@@ -118,7 +129,6 @@ latest_prices = {}
 last_price_update = {'time': pretty_now(), 'prev_time': pretty_now()}
 
 def fetch_latest_prices(symbols):
-    # Always add BTCUSDT so its price is always fetched
     symbols_to_fetch = set(sym for sym in symbols if sym in kraken_pairs)
     symbols_to_fetch.add("BTCUSDT")
     prices = {}
@@ -196,8 +206,6 @@ def dashboard():
         active_bot = "1.0"
     dashboards = {}
     prev_update_time = last_price_update.get('prev_time', last_price_update['time'])
-
-    # Always include BTCUSDT in price fetching
     all_symbols = set()
     for bot_id in BOTS:
         account = load_account(bot_id)
@@ -208,13 +216,11 @@ def dashboard():
     for bot_id, bot_cfg in BOTS.items():
         account = load_account(bot_id)
         symbols = list(account["positions"].keys())
-        # Use the prices already fetched above
         position_stats = calculate_position_stats(account["positions"], prices)
         total_margin = sum(pos['margin_used'] for pos in position_stats)
         total_pl = sum(pos['pnl'] for pos in position_stats)
         available_cash = float(account["balance"])
         equity = available_cash + total_margin + total_pl
-
         positions_html = ""
         for pos in position_stats:
             positions_html += (
@@ -277,101 +283,28 @@ def dashboard():
     <html>
     <head>
         <title>CoinBot Dashboard</title>
-        <!-- REMOVED: <meta http-equiv="refresh" content="10"> -->
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
         <style>
-            body {
-                background: linear-gradient(120deg,#1a1d28 0%, #131520 100%);
-                font-family: 'Segoe UI', 'Roboto', 'Montserrat', Arial, sans-serif;
-                color: #e2e2e2;
-            }
-            .header-logo {
-                height: 44px;
-                margin-right: 18px;
-                vertical-align: middle;
-            }
-            .header-title {
-                font-size: 2.4em;
-                font-weight: bold;
-                letter-spacing: 2px;
-                color: #FFF;
-                display: inline-block;
-                vertical-align: middle;
-                text-shadow: 0 3px 15px #000A, 0 1px 0 #e5b500a0;
-                margin-right: 22px;
-            }
-            .btc-price {
-                display: inline-flex;
-                align-items: center;
-                margin-left: 14px;
-                vertical-align: middle;
-            }
-            .btc-logo {
-                vertical-align: middle;
-                margin-right: 4px;
-                margin-top: -2px;
-            }
-            .nav-tabs .nav-link {
-                font-size: 1.2em;
-                font-weight: 600;
-                background: #222431;
-                border: none;
-                color: #AAA;
-                border-radius: 0;
-                margin-right: 2px;
-                transition: background 0.2s, color 0.2s;
-            }
-            .nav-tabs .nav-link.active, .nav-tabs .nav-link:hover {
-                background: linear-gradient(90deg, #232f43 60%, #232d3a 100%);
-                color: #ffe082 !important;
-                border-bottom: 3px solid #ffe082;
-            }
-            .bot-panel {
-                background: rgba(27,29,39,0.93);
-                border-radius: 18px;
-                padding: 24px 18px;
-                margin-top: 28px;
-                box-shadow: 0 6px 32px #0009, 0 1.5px 6px #0003;
-                border: 1.5px solid #33395b88;
-                position: relative;
-            }
-            .bot-panel h3 {
-                font-weight: bold;
-                font-size: 2em;
-                letter-spacing: 1px;
-            }
-            .bot-panel h5, .bot-panel h6 {
-                color: #ccc;
-            }
+            body { background: linear-gradient(120deg,#1a1d28 0%, #131520 100%); font-family: 'Segoe UI', 'Roboto', 'Montserrat', Arial, sans-serif; color: #e2e2e2;}
+            .header-logo { height: 44px; margin-right: 18px; vertical-align: middle;}
+            .header-title { font-size: 2.4em; font-weight: bold; letter-spacing: 2px; color: #FFF; display: inline-block; vertical-align: middle; text-shadow: 0 3px 15px #000A, 0 1px 0 #e5b500a0; margin-right: 22px;}
+            .btc-price { display: inline-flex; align-items: center; margin-left: 14px; vertical-align: middle;}
+            .btc-logo { vertical-align: middle; margin-right: 4px; margin-top: -2px;}
+            .nav-tabs .nav-link { font-size: 1.2em; font-weight: 600; background: #222431; border: none; color: #AAA; border-radius: 0; margin-right: 2px; transition: background 0.2s, color 0.2s;}
+            .nav-tabs .nav-link.active, .nav-tabs .nav-link:hover { background: linear-gradient(90deg, #232f43 60%, #232d3a 100%); color: #ffe082 !important; border-bottom: 3px solid #ffe082;}
+            .bot-panel { background: rgba(27,29,39,0.93); border-radius: 18px; padding: 24px 18px; margin-top: 28px; box-shadow: 0 6px 32px #0009, 0 1.5px 6px #0003; border: 1.5px solid #33395b88; position: relative;}
+            .bot-panel h3 { font-weight: bold; font-size: 2em; letter-spacing: 1px;}
+            .bot-panel h5, .bot-panel h6 { color: #ccc;}
             .profit { color: #18e198; font-weight: bold;}
             .loss { color: #fd4561; font-weight: bold;}
-            table {
-                background: rgba(19,21,32,0.92);
-                border-radius: 13px;
-                overflow: hidden;
-                margin-bottom: 22px;
-                box-shadow: 0 2px 16px #0003;
-            }
-            th, td {
-                padding: 10px 7px;
-                text-align: center;
-                border-bottom: 1px solid #24273a;
-            }
-            th {
-                background: #25273a;
-                color: #ffe082;
-                font-size: 1.04em;
-            }
+            table { background: rgba(19,21,32,0.92); border-radius: 13px; overflow: hidden; margin-bottom: 22px; box-shadow: 0 2px 16px #0003;}
+            th, td { padding: 10px 7px; text-align: center; border-bottom: 1px solid #24273a;}
+            th { background: #25273a; color: #ffe082; font-size: 1.04em;}
             tr:last-child td { border-bottom: none; }
             .table-sm th, .table-sm td { font-size: 0.98em; }
             .tab-content { margin-top: 0; }
-            .footer {
-                margin-top: 24px; font-size: 0.99em; color: #888;
-                text-align: right;
-            }
-            @media (max-width: 1200px) {
-                .container { max-width: 99vw;}
-            }
+            .footer { margin-top: 24px; font-size: 0.99em; color: #888; text-align: right;}
+            @media (max-width: 1200px) { .container { max-width: 99vw;}}
         </style>
     </head>
     <body>
@@ -391,6 +324,14 @@ def dashboard():
                   <text x="8" y="23" font-size="20" font-family="Arial" font-weight="bold" fill="#fff">₿</text>
                 </svg>
                 <span style="color:#F7931A; font-weight:bold; font-size:1.32em; letter-spacing:1px;">{{ btc_price }}</span>
+            </span>
+            <span style="margin-left: 18px;">
+                <a href="{{ url_for('settings', bot=active) }}" class="btn btn-sm btn-warning">Settings</a>
+            </span>
+            <span style="margin-left: 8px;">
+                {% if session.get('settings_auth') %}
+                    <a href="{{ url_for('settings_logout') }}" class="btn btn-sm btn-secondary">Logout</a>
+                {% endif %}
             </span>
         </div>
         <ul class="nav nav-tabs" id="botTabs" role="tablist">
@@ -475,8 +416,65 @@ def dashboard():
         active=active_bot,
         now=pretty_now(),
         coinbot_update_time=prev_update_time,
-        btc_price=get_bitcoin_price()
+        btc_price=get_bitcoin_price(),
+        session=session
     )
+
+# --- Password protected settings page ---
+@app.route('/settings_login', methods=['GET', 'POST'])
+def settings_login():
+    error = ""
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        if password == SETTINGS_PASSWORD:
+            session['settings_auth'] = True
+            flash("Logged in successfully!", "success")
+            return redirect(url_for('settings', bot=request.args.get('bot', '1.0')))
+        else:
+            error = "Incorrect password"
+    return render_template_string("""
+        <h2>Enter Settings Password</h2>
+        <form method="POST">
+            <input type="password" name="password" autofocus>
+            <button type="submit">Login</button>
+        </form>
+        {% if error %}<div style="color:red">{{ error }}</div>{% endif %}
+        <p><a href="{{ url_for('dashboard') }}">Back to dashboard</a></p>
+    """, error=error)
+
+@app.route('/settings_logout')
+def settings_logout():
+    session.pop('settings_auth', None)
+    flash("Logged out.", "info")
+    return redirect(url_for('dashboard'))
+
+@app.route('/settings', methods=['GET', 'POST'])
+def settings():
+    if not session.get('settings_auth'):
+        return redirect(url_for('settings_login', bot=request.args.get('bot', '1.0')))
+    bot_id = request.args.get("bot", "1.0")
+    if bot_id not in BOTS:
+        bot_id = "1.0"
+    settings = load_bot_settings(bot_id)
+    message = ""
+    if request.method == "POST":
+        leverage = request.form.get("leverage", type=int, default=5)
+        stop_loss_pct = request.form.get("stop_loss_pct", type=float, default=2.5)
+        settings["leverage"] = leverage
+        settings["stop_loss_pct"] = stop_loss_pct
+        save_bot_settings(bot_id, settings)
+        message = "Settings updated!"
+    return render_template_string("""
+        <h2>Settings for {{ bot_id }}</h2>
+        <form method="POST">
+            <label>Leverage: <input type="number" name="leverage" value="{{ settings['leverage'] }}" min="1" max="20"></label><br>
+            <label>Stop Loss % (per position): <input type="number" step="0.01" name="stop_loss_pct" value="{{ settings['stop_loss_pct'] }}"></label><br>
+            <button type="submit">Save</button>
+        </form>
+        <p style="color:green;">{{ message }}</p>
+        <p><a href="{{ url_for('dashboard', active=bot_id) }}">Back to dashboard</a></p>
+        <p><a href="{{ url_for('settings_logout') }}">Logout</a></p>
+    """, bot_id=bot_id, settings=settings, message=message)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -498,6 +496,11 @@ def webhook():
         if not symbol:
             return jsonify({"status": "error", "message": "Missing symbol"}), 400
 
+        # --- Fetch settings for this bot ---
+        settings = load_bot_settings(bot_id)
+        leverage = settings.get("leverage", 5)
+        margin_pct = 0.05  # Still hard-coded. You could add this to settings if desired.
+
         # --- FIX: Fetch latest price on-demand if needed ---
         price = get_kraken_price(symbol)
         if not price or price <= 0:
@@ -508,8 +511,6 @@ def webhook():
 
         account = load_account(bot_id)
         timestamp = pretty_now()
-        leverage = 5  # Or set as desired
-        margin_pct = 0.05  # 5% per trade
         reason = data.get("reason", "TradingView signal")
 
         if action == "buy":
@@ -586,13 +587,15 @@ def webhook():
         logger.error(f"Webhook processing failed: {str(e)}", exc_info=True)
         return jsonify({"status": "error", "message": "Internal server error"}), 500
 
-
 # --- BACKGROUND STOP LOSS & PRICE CHECK THREAD ---
 def check_and_trigger_stop_losses():
     while True:
         try:
             for bot_id in BOTS:
                 account = load_account(bot_id)
+                settings = load_bot_settings(bot_id)
+                leverage = settings.get("leverage", 5)
+                stop_loss_pct = settings.get("stop_loss_pct", 2.5)
                 for symbol, positions in account["positions"].items():
                     kraken_price = get_kraken_price(symbol)
                     if kraken_price == 0:
@@ -601,16 +604,16 @@ def check_and_trigger_stop_losses():
                     new_positions = []
                     for position in positions:
                         entry = float(position["entry_price"])
-                        leverage = int(position["leverage"])
-                        stop_loss_price = entry * (1 - (0.025 / leverage))  # 2.5% of margin used
+                        lev = int(position.get("leverage", leverage))
+                        stop_loss_price = entry * (1 - (stop_loss_pct / 100) / lev)  # Use current settings
                         if kraken_price > 0 and kraken_price <= stop_loss_price:
                             logger.info(f"Stop loss triggered for {symbol} at price {kraken_price:.6f} (entry: {entry:.6f}, stop: {stop_loss_price:.6f})")
                             reason = "Stop Loss"
                             timestamp = pretty_now()
                             volume = float(position["volume"])
                             margin_used = float(position["margin_used"])
-                            profit = (kraken_price - entry) * volume * leverage
-                            pl_pct = ((kraken_price - entry) / entry * leverage * 100) if entry > 0 else 0
+                            profit = (kraken_price - entry) * volume * lev
+                            pl_pct = ((kraken_price - entry) / entry * lev * 100) if entry > 0 else 0
                             account["balance"] += margin_used + profit
                             account["trade_log"].append({
                                 "timestamp": timestamp,
@@ -622,7 +625,7 @@ def check_and_trigger_stop_losses():
                                 "profit": round(profit, 2),
                                 "pl_pct": round(pl_pct, 2),
                                 "balance": round(account["balance"], 2),
-                                "leverage": leverage,
+                                "leverage": lev,
                                 "avg_entry": round(entry, 6),
                             })
                         else:
@@ -635,9 +638,9 @@ def check_and_trigger_stop_losses():
         for bot_id in BOTS:
             account = load_account(bot_id)
             needed_symbols.update(account["positions"].keys())
-        needed_symbols.add("BTCUSDT")  # Always keep BTC up-to-date for the dashboard
+        needed_symbols.add("BTCUSDT")
         fetch_latest_prices(list(needed_symbols))
-        time.sleep(2)  # Check every 2 seconds
+        time.sleep(2)
 
 stop_loss_thread = threading.Thread(target=check_and_trigger_stop_losses, daemon=True)
 stop_loss_thread.start()
