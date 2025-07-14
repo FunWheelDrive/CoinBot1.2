@@ -637,7 +637,7 @@ def check_and_trigger_stop_losses():
             needed_symbols.update(account["positions"].keys())
         needed_symbols.add("BTCUSDT")  # Always keep BTC up-to-date for the dashboard
         fetch_latest_prices(list(needed_symbols))
-        time.sleep(10)  # Check every 10 seconds
+        time.sleep(2)  # Check every 2 seconds
 
 stop_loss_thread = threading.Thread(target=check_and_trigger_stop_losses, daemon=True)
 stop_loss_thread.start()
