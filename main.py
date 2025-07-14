@@ -190,23 +190,22 @@ def dashboard():
     dashboards = {}
     prev_update_time = last_price_update.get('prev_time', last_price_update['time'])
 
-    # Always fetch BTC price for the dashboard header
-    fetch_latest_prices(['BTCUSDT'])
-
     for bot_id, bot_cfg in BOTS.items():
         account = load_account(bot_id)
         symbols = list(account["positions"].keys())
-
-        # Fetch prices for this bot's open symbols
         prices = fetch_latest_prices(symbols)
 
-        equity = float(account["balance"])
-        total_pl = 0
-        positions_html = ""
+        # === NEW BALANCE & EQUITY LOGIC ===
+        # "Balance": available cash (after margin used is removed from prior buys)
+        # "Equity": cash + margin in positions + all open P/L (full liquidation value)
         position_stats = calculate_position_stats(account["positions"], prices)
+        total_margin = sum(pos['margin_used'] for pos in position_stats)
+        total_pl = sum(pos['pnl'] for pos in position_stats)
+        available_cash = float(account["balance"])
+        equity = available_cash + total_margin + total_pl
+
+        positions_html = ""
         for pos in position_stats:
-            equity += pos['margin_used'] + pos['pnl']
-            total_pl += pos['pnl']
             positions_html += (
                 f"<tr><td>{pos['symbol']}</td>"
                 f"<td>{pos['volume']:.6f}</td>"
@@ -255,7 +254,7 @@ def dashboard():
             'bot': bot_cfg,
             'account': account,
             'equity': equity,
-            'available_cash': account["balance"],
+            'available_cash': available_cash,
             'total_pl': total_pl,
             'coin_stats_html': coin_stats_html,
             'positions_html': positions_html,
@@ -267,6 +266,7 @@ def dashboard():
     <html>
     <head>
         <title>CoinBot Dashboard</title>
+        <meta http-equiv="refresh" content="10">
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
         <style>
             body {
@@ -397,7 +397,7 @@ def dashboard():
             <div class="tab-pane fade {% if active == bot_id %}show active{% endif %}" id="bot{{ bot_id }}">
                 <div class="bot-panel" style="box-shadow: 0 2px 12px {{ bot_data['bot']['color'] }}33;">
                     <h3 style="color: {{ bot_data['bot']['color'] }};">{{ bot_data['bot']["name"] }}</h3>
-                    <h5>Balance: <span style="color:{{ bot_data['bot']['color'] }};">${{ bot_data['account']['balance']|round(2) }}</span>
+                    <h5>Balance: <span style="color:{{ bot_data['bot']['color'] }};">${{ bot_data['available_cash']|round(2) }}</span>
                         | Equity: <span style="color:{{ bot_data['bot']['color'] }};">${{ bot_data['equity']|round(2) }}</span>
                     </h5>
                     <h6>Total P/L: <span class="{% if bot_data['total_pl'] > 0 %}profit{% elif bot_data['total_pl'] < 0 %}loss{% endif %}">${{ '{0:.2f}'.format(bot_data['total_pl']) }}</span></h6>
@@ -620,7 +620,7 @@ def check_and_trigger_stop_losses():
             account = load_account(bot_id)
             needed_symbols.update(account["positions"].keys())
         fetch_latest_prices(list(needed_symbols))
-        time.sleep(10)  # Check every minute; lower if needed (e.g., 10s for faster)
+        time.sleep(10)  # Check every 10 seconds
 
 stop_loss_thread = threading.Thread(target=check_and_trigger_stop_losses, daemon=True)
 stop_loss_thread.start()
@@ -631,6 +631,7 @@ if __name__ == '__main__':
         logger.info(f"Created data directory: {DATA_DIR}")
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
+
 
 
 
