@@ -23,7 +23,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key")
 
 # --- Password for settings page ---
-SETTINGS_PASSWORD = os.environ.get("SETTINGS_PASSWORD", "Bot")  # CHANGE for production!
+SETTINGS_PASSWORD = bot  # CHANGE for production!
 
 STARTING_BALANCE = 1000.00
 file_lock = threading.Lock()
