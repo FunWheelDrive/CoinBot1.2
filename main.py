@@ -490,20 +490,22 @@ def webhook():
         timestamp = pretty_now()
         leverage = 5  # Or set as desired
         margin_pct = 0.05  # 5% per trade
-
-        # Optional: get volume from webhook (else auto-calc)
-        volume = float(data.get("volume", 0))
         reason = data.get("reason", "TradingView signal")
 
         if action == "buy":
             margin_used = account["balance"] * margin_pct
-            if not volume or volume <= 0:
-                volume = round((margin_used * leverage) / price, 6)
-            if account["balance"] < margin_used:
-                return jsonify({"status": "error", "message": "Insufficient balance"}), 400
+
+            if margin_used <= 0:
+                return jsonify({"status": "error", "message": "Insufficient balance for allocation"}), 400
+
+            # Calculate volume to buy based on margin_used, leverage, and Kraken price
+            volume = round((margin_used * leverage) / price, 6)
+
+            # Position limits check
             if len(account["positions"].get(symbol, [])) >= 5:
                 return jsonify({"status": "error", "message": "Position limit reached"}), 400
 
+            # Create new position
             new_position = {
                 "volume": volume,
                 "entry_price": price,
@@ -513,6 +515,7 @@ def webhook():
             }
             account["positions"].setdefault(symbol, []).append(new_position)
             account["balance"] -= margin_used
+
             account["trade_log"].append({
                 "timestamp": timestamp,
                 "action": "buy",
@@ -524,8 +527,8 @@ def webhook():
                 "leverage": leverage,
             })
             save_account(bot_id, account)
-            logger.info(f"BUY executed for {symbol} at {price} (bot {bot_id})")
-            return jsonify({"status": "success", "action": "buy", "symbol": symbol, "price": price}), 200
+            logger.info(f"BUY executed for {symbol} at {price} with volume {volume} (bot {bot_id})")
+            return jsonify({"status": "success", "action": "buy", "symbol": symbol, "price": price, "volume": volume}), 200
 
         elif action == "sell":
             positions = account["positions"].get(symbol, [])
@@ -622,6 +625,7 @@ if __name__ == '__main__':
         logger.info(f"Created data directory: {DATA_DIR}")
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
+
 
 
 
