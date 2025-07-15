@@ -22,6 +22,22 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key")
 
+# --- Jinja price format filter ---
+@app.template_filter('format_price')
+def format_price(price):
+    try:
+        price = float(price)
+        if price >= 1:
+            return f"${price:,.2f}"
+        elif price >= 0.01:
+            return f"${price:,.4f}"
+        elif price > 0:
+            return f"${price:,.8f}"
+        else:
+            return "$0.00"
+    except Exception:
+        return "--"
+
 # --- Password for settings page ---
 SETTINGS_PASSWORD = "bot"  # CHANGE for production!
 
@@ -215,67 +231,20 @@ def dashboard():
 
     for bot_id, bot_cfg in BOTS.items():
         account = load_account(bot_id)
-        symbols = list(account["positions"].keys())
         position_stats = calculate_position_stats(account["positions"], prices)
         total_margin = sum(pos['margin_used'] for pos in position_stats)
         total_pl = sum(pos['pnl'] for pos in position_stats)
         available_cash = float(account["balance"])
         equity = available_cash + total_margin + total_pl
-        positions_html = ""
-        for pos in position_stats:
-            positions_html += (
-                f"<tr><td>{pos['symbol']}</td>"
-                f"<td>{pos['volume']:.6f}</td>"
-                f"<td>${pos['entry_price']:.2f}</td>"
-                f"<td>${pos['current_price']:.2f}</td>"
-                f"<td>{pos['leverage']}x</td>"
-                f"<td>${pos['margin_used']:.2f}</td>"
-                f"<td>${pos['position_size']:.2f}</td>"
-                f"<td class='{pos['pl_class']}'>{pos['pnl']:+.2f}</td></tr>"
-            )
-        if not positions_html:
-            positions_html = "<tr><td colspan='8'>No open positions</td></tr>"
-        trade_log_html = ""
-        for log in reversed(account["trade_log"]):
-            profit = log.get('profit')
-            pl_class = "profit" if profit and profit > 0 else "loss" if profit and profit < 0 else ""
-            avg_entry_val = log.get('avg_entry')
-            avg_entry_str = f"{float(avg_entry_val):.2f}" if avg_entry_val not in (None, '') else ''
-            trade_log_html += (
-                f"<tr><td>{log.get('timestamp', '')}</td>"
-                f"<td>{log.get('action', '')}</td>"
-                f"<td>{log.get('symbol', '')}</td>"
-                f"<td>{log.get('reason', '')}</td>"
-                f"<td>${float(log.get('price', 0)):.2f}</td>"
-                f"<td>{float(log.get('amount', 0)):.6f}</td>"
-                f"<td class='{pl_class}'>{f'{float(profit):+.2f}' if profit is not None else ''}</td>"
-                f"<td class='{pl_class}'>{log.get('pl_pct', '')}</td>"
-                f"<td>${float(log.get('balance', 0)):.2f}</td>"
-                f"<td>{log.get('leverage', '')}</td>"
-                f"<td>{avg_entry_str}</td>"
-                f"</tr>"
-            )
-        if not trade_log_html:
-            trade_log_html = "<tr><td colspan='11'>No trades yet</td></tr>"
-        coin_stats = calculate_coin_stats(account["trade_log"])
-        coin_stats_html = ""
-        for coin, pl in sorted(coin_stats.items()):
-            pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
-            coin_stats_html += (
-                f"<tr><td>{coin}</td>"
-                f"<td class='{pl_class}'>{pl:+.2f}</td></tr>"
-            )
-        if not coin_stats_html:
-            coin_stats_html = "<tr><td colspan='2'>No trades yet</td></tr>"
         dashboards[bot_id] = {
             'bot': bot_cfg,
             'account': account,
             'equity': equity,
             'available_cash': available_cash,
             'total_pl': total_pl,
-            'coin_stats_html': coin_stats_html,
-            'positions_html': positions_html,
-            'trade_log_html': trade_log_html
+            'position_stats': position_stats,
+            'trade_log': account["trade_log"],
+            'coin_stats': calculate_coin_stats(account["trade_log"])
         }
 
     html = '''
@@ -368,7 +337,20 @@ def dashboard():
                             </tr>
                         </thead>
                         <tbody>
-                        {{ bot_data['positions_html']|safe }}
+                        {% for pos in bot_data['position_stats'] %}
+                            <tr>
+                                <td>{{ pos['symbol'] }}</td>
+                                <td>{{ pos['volume'] }}</td>
+                                <td>{{ pos['entry_price']|format_price }}</td>
+                                <td>{{ pos['current_price']|format_price }}</td>
+                                <td>{{ pos['leverage'] }}x</td>
+                                <td>${{ pos['margin_used']|round(2) }}</td>
+                                <td>${{ pos['position_size']|round(2) }}</td>
+                                <td class="{{ pos['pl_class'] }}">{{ pos['pnl']|round(2) }}</td>
+                            </tr>
+                        {% else %}
+                            <tr><td colspan="8">No open positions</td></tr>
+                        {% endfor %}
                         </tbody>
                     </table>
                     <h5 class="mt-4 mb-2">Trade Log</h5>
@@ -389,13 +371,40 @@ def dashboard():
                             </tr>
                         </thead>
                         <tbody>
-                        {{ bot_data['trade_log_html']|safe }}
+                        {% for log in bot_data['trade_log']|reverse %}
+                            <tr>
+                                <td>{{ log.timestamp }}</td>
+                                <td>{{ log.action }}</td>
+                                <td>{{ log.symbol }}</td>
+                                <td>{{ log.reason }}</td>
+                                <td>{{ log.price|format_price }}</td>
+                                <td>{{ log.amount }}</td>
+                                <td class="{% if log.profit and log.profit > 0 %}profit{% elif log.profit and log.profit < 0 %}loss{% endif %}">
+                                    {% if log.profit is not none %}{{ log.profit|round(2) }}{% endif %}
+                                </td>
+                                <td>{{ log.pl_pct }}</td>
+                                <td>${{ log.balance }}</td>
+                                <td>{{ log.leverage }}</td>
+                                <td>
+                                    {% if log.avg_entry is not none %}{{ log.avg_entry|round(6) }}{% endif %}
+                                </td>
+                            </tr>
+                        {% else %}
+                            <tr><td colspan="11">No trades yet</td></tr>
+                        {% endfor %}
                         </tbody>
                     </table>
                     <h5 class="mt-4 mb-2">Coin P/L Summary</h5>
                     <table class="table table-sm">
                         <tr><th>Coin</th><th>Total P/L</th></tr>
-                        {{ bot_data['coin_stats_html']|safe }}
+                        {% for coin, pl in bot_data['coin_stats'].items() %}
+                            <tr>
+                                <td>{{ coin }}</td>
+                                <td class="{% if pl > 0 %}profit{% elif pl < 0 %}loss{% endif %}">{{ pl|round(2) }}</td>
+                            </tr>
+                        {% else %}
+                            <tr><td colspan="2">No trades yet</td></tr>
+                        {% endfor %}
                     </table>
                 </div>
             </div>
