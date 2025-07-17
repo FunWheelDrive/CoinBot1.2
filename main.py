@@ -391,8 +391,13 @@ def dashboard():
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
         <style>
             body { background: linear-gradient(120deg,#1a1d28 0%, #131520 100%); font-family: 'Segoe UI', 'Roboto', 'Montserrat', Arial, sans-serif; color: #e2e2e2;}
-            .header-logo { height: 44px; margin-right: 18px; vertical-align: middle;}
-            .header-title { font-size: 2.4em; font-weight: bold; letter-spacing: 2px; color: #FFF; display: inline-block; vertical-align: middle; text-shadow: 0 3px 15px #000A, 0 1px 0 #e5b500a0; margin-right: 22px;}
+            .header-logo-hover {
+                transition: all 0.3s ease;
+            }
+            .header-logo-hover:hover {
+                transform: scale(1.05);
+                opacity: 0.9;
+            }
             .btc-price { display: inline-flex; align-items: center; margin-left: 14px; vertical-align: middle;}
             .btc-logo { vertical-align: middle; margin-right: 4px; margin-top: -2px;}
             .nav-tabs .nav-link { font-size: 1.2em; font-weight: 600; background: #222431; border: none; color: #AAA; border-radius: 0; margin-right: 2px; transition: background 0.2s, color 0.2s;}
@@ -413,33 +418,28 @@ def dashboard():
         </style>
     </head>
     <body>
-   <div class="mb-4 d-flex align-items-center">
-    <svg class="header-logo" viewBox="0 0 50 50" fill="none">
-        <circle cx="25" cy="25" r="25" fill="#23252e"/>
-        <g>
-          <circle cx="25" cy="25" r="19.5" fill="#F7931A"/>
-          <text x="15" y="33" font-size="22" font-family="Arial" font-weight="bold" fill="#fff">₿</text>
-        </g>
-    </svg>
-    <img src="{{ url_for('static', filename='COINBO.png') }}" 
-         alt="COINBO Logo" 
-         style="height: 44px; margin-right: 18px;">
-    <span class="btc-price">
-        <svg class="btc-logo" viewBox="0 0 30 30" width="26" height="26">
-          <circle cx="15" cy="15" r="14" fill="#F7931A"/>
-          <text x="8" y="23" font-size="20" font-family="Arial" font-weight="bold" fill="#fff">₿</text>
-        </svg>
-        <span style="color:#F7931A; font-weight:bold; font-size:1.32em; letter-spacing:1px;">{{ btc_price }}</span>
-    </span>
-    <span style="margin-left: 18px;">
-        <a href="{{ url_for('settings', bot=active) }}" class="btn btn-sm btn-warning">Settings</a>
-    </span>
-    <span style="margin-left: 8px;">
-        {% if session.get('settings_auth') %}
-            <a href="{{ url_for('settings_logout') }}" class="btn btn-sm btn-secondary">Logout</a>
-        {% endif %}
-    </span>
-</div>
+    <div class="container mt-4">
+        <div class="mb-4 d-flex align-items-center">
+            <img src="{{ url_for('static', filename='COINBO.png') }}" 
+                 alt="COINBO Logo" 
+                 style="height: 325px; margin-right: 500px;"
+                 class="header-logo-hover">
+            <span class="btc-price">
+                <svg class="btc-logo" viewBox="0 0 30 30" width="26" height="26">
+                  <circle cx="15" cy="15" r="14" fill="#F7931A"/>
+                  <text x="8" y="23" font-size="20" font-family="Arial" font-weight="bold" fill="#fff">₿</text>
+                </svg>
+                <span style="color:#F7931A; font-weight:bold; font-size:1.32em; letter-spacing:1px;">{{ btc_price }}</span>
+            </span>
+            <span style="margin-left: 18px;">
+                <a href="{{ url_for('settings', bot=active) }}" class="btn btn-sm btn-warning">Settings</a>
+            </span>
+            <span style="margin-left: 8px;">
+                {% if session.get('settings_auth') %}
+                    <a href="{{ url_for('settings_logout') }}" class="btn btn-sm btn-secondary">Logout</a>
+                {% endif %}
+            </span>
+        </div>
         <ul class="nav nav-tabs" id="botTabs" role="tablist">
             {% for bot_id, bot_data in dashboards.items() %}
             <li class="nav-item" role="presentation">
