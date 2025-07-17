@@ -759,7 +759,14 @@ def webhook():
 def check_and_trigger_stop_losses():
     while True:
         try:
+             all_symbols = set()
             for bot_id in BOTS:
+                account = load_account(bot_id)
+                all_symbols.update(account["positions"].keys())
+            if all_symbols:
+                fetch_latest_prices(list(all_symbols))
+            
+        for bot_id in BOTS:
                 account = load_account(bot_id)
                 modified = False
 
