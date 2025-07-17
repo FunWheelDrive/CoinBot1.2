@@ -227,13 +227,26 @@ def calculate_position_stats(positions, prices):
             leverage = int(position.get("leverage", 1))
             margin_used = float(position.get("margin_used", 0))
             stop_loss_pct = float(position.get("stop_loss_pct", 2.5))
+            position_type = position.get("type", "long")
+            
             if not margin_used and entry and volume and leverage:
                 margin_used = (entry * volume) / leverage
+                
             position_size = margin_used * leverage
-            pnl = (current_price - entry) * volume
+            
+            # Calculate P&L differently for long vs short
+            if position_type == "long":
+                pnl = (current_price - entry) * volume
+                stop_loss_price = entry * (1 - stop_loss_pct/100)
+            else:  # short
+                pnl = (entry - current_price) * volume
+                stop_loss_price = entry * (1 + stop_loss_pct/100)
+                
             pl_class = "profit" if pnl > 0 else "loss" if pnl < 0 else ""
+            
             position_stats.append({
                 'symbol': symbol,
+                'type': position_type,
                 'volume': volume,
                 'entry_price': entry,
                 'current_price': current_price,
@@ -243,7 +256,7 @@ def calculate_position_stats(positions, prices):
                 'pnl': pnl,
                 'pl_class': pl_class,
                 'stop_loss_pct': stop_loss_pct,
-                'stop_loss_price': entry * (1 - stop_loss_pct/100)
+                'stop_loss_price': stop_loss_price
             })
     return position_stats
 
@@ -526,34 +539,6 @@ def settings_logout():
     flash("Logged out.", "info")
     return redirect(url_for('dashboard'))
 
-@app.route('/settings', methods=['GET', 'POST'])
-def settings():
-    if not session.get('settings_auth'):
-        return redirect(url_for('settings_login', bot=request.args.get('bot', '1.0')))
-    bot_id = request.args.get("bot", "1.0")
-    if bot_id not in BOTS:
-        bot_id = "1.0"
-    settings = load_bot_settings(bot_id)
-    message = ""
-    if request.method == "POST":
-        leverage = request.form.get("leverage", type=int, default=5)
-        stop_loss_pct = request.form.get("stop_loss_pct", type=float, default=2.5)
-        settings["leverage"] = leverage
-        settings["stop_loss_pct"] = stop_loss_pct
-        save_bot_settings(bot_id, settings)
-        message = "Settings updated!"
-    return render_template_string("""
-        <h2>Settings for {{ bot_id }}</h2>
-        <form method="POST">
-            <label>Leverage: <input type="number" name="leverage" value="{{ settings['leverage'] }}" min="1" max="20"></label><br>
-            <label>Stop Loss % (per position): <input type="number" step="0.01" name="stop_loss_pct" value="{{ settings['stop_loss_pct'] }}"></label><br>
-            <button type="submit">Save</button>
-        </form>
-        <p style="color:green;">{{ message }}</p>
-        <p><a href="{{ url_for('dashboard', active=bot_id) }}">Back to dashboard</a></p>
-        <p><a href="{{ url_for('settings_logout') }}">Logout</a></p>
-    """, bot_id=bot_id, settings=settings, message=message)
-
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -567,7 +552,7 @@ def webhook():
             return jsonify({"status": "error", "message": f"Unknown bot: {bot_id}"}), 400
 
         action = str(data.get("action", "")).lower()
-        if action not in ["buy", "sell"]:
+        if action not in ["buy", "sell", "short", "cover"]:
             return jsonify({"status": "error", "message": f"Invalid action: {action}"}), 400
 
         symbol = str(data.get("symbol", "")).upper()
@@ -592,13 +577,13 @@ def webhook():
         timestamp = pretty_now()
         reason = data.get("reason", "TradingView signal")
 
-        if action == "buy":
+        if action in ["buy", "short"]:  # Opening positions
             margin_used = account["balance"] * margin_pct
 
             if margin_used <= 0:
                 return jsonify({"status": "error", "message": "Insufficient balance for allocation"}), 400
 
-            # Calculate volume to buy
+            # Calculate volume to buy/short
             volume = round((margin_used * leverage) / price, 6)
 
             # Position limits check
@@ -607,20 +592,21 @@ def webhook():
 
             # Create new position with stop loss info
             new_position = {
+                "type": "long" if action == "buy" else "short",
                 "volume": volume,
                 "entry_price": price,
                 "timestamp": timestamp,
                 "margin_used": margin_used,
                 "leverage": leverage,
                 "stop_loss_pct": stop_loss_pct,
-                "stop_loss_price": price * (1 - stop_loss_pct/100)  # Kraken-style fixed percentage
+                "stop_loss_price": price * (1 - stop_loss_pct/100) if action == "buy" else price * (1 + stop_loss_pct/100)
             }
             account["positions"].setdefault(symbol, []).append(new_position)
             account["balance"] -= margin_used
 
             account["trade_log"].append({
                 "timestamp": timestamp,
-                "action": "buy",
+                "action": action,
                 "symbol": symbol,
                 "reason": reason,
                 "price": price,
@@ -629,34 +615,47 @@ def webhook():
                 "leverage": leverage,
             })
             save_account(bot_id, account)
-            logger.info(f"BUY executed for {symbol} at {price} with SL {stop_loss_pct}% (bot {bot_id})")
+            logger.info(f"{action.upper()} executed for {symbol} at {price} with SL {stop_loss_pct}% (bot {bot_id})")
             return jsonify({
                 "status": "success",
-                "action": "buy",
+                "action": action,
                 "symbol": symbol,
                 "price": price,
                 "volume": volume,
                 "stop_loss_price": new_position["stop_loss_price"]
             }), 200
 
-        elif action == "sell":
-            positions = account["positions"].get(symbol, [])
+        elif action in ["sell", "cover"]:  # Closing positions
+            positions = [p for p in account["positions"].get(symbol, []) 
+                        if (action == "sell" and p["type"] == "long") or 
+                           (action == "cover" and p["type"] == "short")]
+            
             if not positions:
-                return jsonify({"status": "error", "message": "No positions to sell"}), 400
+                return jsonify({"status": "error", "message": f"No {action} positions to close"}), 400
 
             total_volume = sum(float(p["volume"]) for p in positions)
             total_margin = sum(float(p["margin_used"]) for p in positions)
             avg_entry = sum(float(p["entry_price"]) * float(p["volume"]) for p in positions) / total_volume if total_volume > 0 else 0
             
-            profit = (price - avg_entry) * total_volume
+            # Calculate profit differently for long vs short
+            if action == "sell":  # Closing long position
+                profit = (price - avg_entry) * total_volume
+            else:  # Closing short position
+                profit = (avg_entry - price) * total_volume
+                
             pl_pct = ((price - avg_entry) / avg_entry * 100) if avg_entry > 0 else 0
+            if action == "cover":
+                pl_pct = -pl_pct  # Invert for short positions
 
             account["balance"] += total_margin + profit
-            account["positions"][symbol] = []
+            
+            # Remove the closed positions
+            account["positions"][symbol] = [p for p in account["positions"].get(symbol, []) 
+                                          if p not in positions]
             
             account["trade_log"].append({
                 "timestamp": timestamp,
-                "action": "sell",
+                "action": action,
                 "symbol": symbol,
                 "reason": reason,
                 "price": price,
@@ -667,15 +666,14 @@ def webhook():
                 "avg_entry": round(avg_entry, 8),
             })
             save_account(bot_id, account)
-            logger.info(f"SELL executed for {symbol} at {price} (bot {bot_id})")
-            return jsonify({"status": "success", "action": "sell", "symbol": symbol, "price": price}), 200
+            logger.info(f"{action.upper()} executed for {symbol} at {price} (bot {bot_id})")
+            return jsonify({"status": "success", "action": action, "symbol": symbol, "price": price}), 200
 
         return jsonify({"status": "error", "message": "Unhandled action"}), 400
 
     except Exception as e:
         logger.error(f"Webhook processing failed: {str(e)}", exc_info=True)
         return jsonify({"status": "error", "message": "Internal server error"}), 500
-
 # --- BACKGROUND STOP LOSS CHECKER ---
 def check_and_trigger_stop_losses():
     while True:
@@ -691,23 +689,37 @@ def check_and_trigger_stop_losses():
                         
                     new_positions = []
                     for position in positions:
-                        # Use the position's stored stop loss price
-                        stop_loss_price = position.get("stop_loss_price", 
-                                                    position["entry_price"] * (1 - position.get("stop_loss_pct", 2.5)/100))
+                        position_type = position.get("type", "long")
                         
-                        if current_price <= stop_loss_price:
+                        if position_type == "long":
+                            stop_loss_price = position.get("stop_loss_price", 
+                                                        position["entry_price"] * (1 - position.get("stop_loss_pct", 2.5)/100))
+                            trigger_condition = current_price <= stop_loss_price
+                        else:  # short position
+                            stop_loss_price = position.get("stop_loss_price", 
+                                                        position["entry_price"] * (1 + position.get("stop_loss_pct", 2.5)/100))
+                            trigger_condition = current_price >= stop_loss_price
+                        
+                        if trigger_condition:
                             # Trigger stop loss
                             volume = float(position["volume"])
                             margin_used = float(position["margin_used"])
                             entry = float(position["entry_price"])
                             stop_loss_pct = float(position.get("stop_loss_pct", 2.5))
                             
-                            profit = (current_price - entry) * volume
+                            # Calculate profit differently for long vs short
+                            if position_type == "long":
+                                profit = (current_price - entry) * volume
+                            else:
+                                profit = (entry - current_price) * volume
+                                
                             account["balance"] += margin_used + profit
+                            
+                            action = "sell" if position_type == "long" else "cover"
                             
                             account["trade_log"].append({
                                 "timestamp": pretty_now(),
-                                "action": "sell",
+                                "action": action,
                                 "symbol": symbol,
                                 "reason": f"Stop Loss ({stop_loss_pct}%)",
                                 "price": current_price,
@@ -718,7 +730,7 @@ def check_and_trigger_stop_losses():
                                 "avg_entry": round(entry, 8),
                             })
                             modified = True
-                            logger.info(f"Stop loss triggered for {symbol} at {current_price}")
+                            logger.info(f"Stop loss triggered for {symbol} {position_type} at {current_price}")
                         else:
                             new_positions.append(position)
                     
@@ -731,6 +743,7 @@ def check_and_trigger_stop_losses():
             logger.error(f"Error in stop loss checker: {str(e)}", exc_info=True)
         
         time.sleep(2)
+
 
 # --- Start Background Thread ---
 stop_loss_thread = threading.Thread(target=check_and_trigger_stop_losses, daemon=True)
