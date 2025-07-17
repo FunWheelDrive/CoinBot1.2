@@ -56,37 +56,37 @@ def format_volume(volume):
         return "--"
 
 def format_profit(profit):
+    """Safely formats profit values with appropriate decimal places"""
     try:
-        # Handle None or empty string
+        # Handle all falsey values except 0
         if profit is None or profit == '':
             return "0.00"
             
-        # Convert to float
+        # Convert to float - handles strings, ints, etc.
         profit_float = float(profit)
         
-        # Handle zero case first
+        # Handle zero case
         if profit_float == 0:
             return "0.00"
             
-        # Format based on magnitude
-        if abs(profit_float) >= 1000:
-            formatted = f"{profit_float:+,.0f}"
-        elif abs(profit_float) >= 1:
-            formatted = f"{profit_float:+,.2f}"
-            if formatted.endswith(".00"):
-                formatted = formatted[:-3]  # Remove .00 for whole numbers
-        elif abs(profit_float) >= 0.01:
+        # Determine formatting based on magnitude
+        abs_profit = abs(profit_float)
+        
+        if abs_profit >= 1000:
+            return f"{profit_float:+,.0f}"
+        elif abs_profit >= 1:
+            return f"{profit_float:+,.2f}".replace(".00", "")
+        elif abs_profit >= 0.01:
             formatted = f"{profit_float:+,.4f}"
-            formatted = formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
+            return formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
         else:
             formatted = f"{profit_float:+,.6f}"
-            formatted = formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
+            return formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
             
-        return formatted
-    except (ValueError, TypeError) as e:
-        logger.error(f"format_profit error: {e} | profit={profit}")
+    except Exception as e:
+        logger.error(f"Profit formatting failed: {e} | Input: {profit} | Type: {type(profit)}")
         return "--"
-
+        
 app.jinja_env.filters['format_price'] = format_price
 app.jinja_env.filters['format_volume'] = format_volume
 app.jinja_env.filters['format_profit'] = format_profit
