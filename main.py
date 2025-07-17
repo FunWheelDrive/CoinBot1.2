@@ -57,20 +57,35 @@ def format_volume(volume):
 
 def format_profit(profit):
     try:
-        profit = float(profit)
-        if abs(profit) >= 1000:
-            return f"{profit:+,.0f}"
-        elif abs(profit) >= 1:
-            return f"{profit:+,.2f}".rstrip("0").rstrip(".")
-        elif abs(profit) >= 0.01:
-            return f"{profit:+,.4f}".rstrip("0").rstrip(".")
-        elif profit != 0:
-            return f"{profit:+,.6f}".rstrip("0").rstrip(".")
-        else:
+        # Handle None or empty string
+        if profit is None or profit == '':
             return "0.00"
-    except Exception:
+            
+        # Convert to float
+        profit_float = float(profit)
+        
+        # Handle zero case first
+        if profit_float == 0:
+            return "0.00"
+            
+        # Format based on magnitude
+        if abs(profit_float) >= 1000:
+            formatted = f"{profit_float:+,.0f}"
+        elif abs(profit_float) >= 1:
+            formatted = f"{profit_float:+,.2f}"
+            if formatted.endswith(".00"):
+                formatted = formatted[:-3]  # Remove .00 for whole numbers
+        elif abs(profit_float) >= 0.01:
+            formatted = f"{profit_float:+,.4f}"
+            formatted = formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
+        else:
+            formatted = f"{profit_float:+,.6f}"
+            formatted = formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
+            
+        return formatted
+    except (ValueError, TypeError) as e:
+        logger.error(f"format_profit error: {e} | profit={profit}")
         return "--"
-
 
 app.jinja_env.filters['format_price'] = format_price
 app.jinja_env.filters['format_volume'] = format_volume
