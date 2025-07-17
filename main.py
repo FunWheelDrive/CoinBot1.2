@@ -422,7 +422,7 @@ def dashboard():
         <div class="mb-4 d-flex align-items-center">
             <img src="{{ url_for('static', filename='COINBO.png') }}" 
                  alt="COINBO Logo" 
-                 style="height: 325px; margin-right: 500px;"
+                 style="height: 125px; margin-right: 300px;"
                  class="header-logo-hover">
             <span class="btc-price">
                 <svg class="btc-logo" viewBox="0 0 30 30" width="26" height="26">
