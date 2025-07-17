@@ -792,7 +792,7 @@ def check_and_trigger_stop_losses():
                         stop_loss_pct = float(position.get("stop_loss_pct", 2.5))
                         leverage = int(position.get("leverage", 1))
 
-                        # Stop loss/take profit logic
+                        # Stop loss/take profit logic (THIS IS UPDATED)
                         if position_type == "long":
                             stop_loss_trigger = current_price <= stop_loss_price
                             take_profit_trigger = take_profit_price is not None and current_price >= take_profit_price
@@ -801,14 +801,23 @@ def check_and_trigger_stop_losses():
                             take_profit_trigger = take_profit_price is not None and current_price <= take_profit_price
 
                         if stop_loss_trigger or take_profit_trigger:
-                            if position_type == "long":
-                                profit = (current_price - entry) * volume
-                                action = "sell"
-                                reason = f"Stop Loss ({stop_loss_pct}%)" if stop_loss_trigger else f"Take Profit ({take_profit_pct}%)"
+                            # ---- PATCH: Always close at the original stop_loss/take_profit price ----
+                            if stop_loss_trigger:
+                                exit_price = stop_loss_price
+                                reason = f"Stop Loss ({stop_loss_pct}%)"
+                            elif take_profit_trigger:
+                                exit_price = take_profit_price
+                                reason = f"Take Profit ({take_profit_pct}%)"
                             else:
-                                profit = (entry - current_price) * volume
+                                exit_price = current_price
+                                reason = "Unknown"
+
+                            if position_type == "long":
+                                profit = (exit_price - entry) * volume
+                                action = "sell"
+                            else:
+                                profit = (entry - exit_price) * volume
                                 action = "cover"
-                                reason = f"Stop Loss ({stop_loss_pct}%)" if stop_loss_trigger else f"Take Profit ({take_profit_pct}%)"
 
                             account["balance"] += margin_used + profit
 
@@ -817,7 +826,7 @@ def check_and_trigger_stop_losses():
                                 "action": action,
                                 "symbol": symbol,
                                 "reason": reason,
-                                "price": current_price,
+                                "price": exit_price,
                                 "amount": volume,
                                 "profit": round(profit, 8),
                                 "balance": round(account["balance"], 8),
@@ -825,7 +834,7 @@ def check_and_trigger_stop_losses():
                                 "avg_entry": round(entry, 8),
                             })
                             modified = True
-                            logger.info(f"{reason} triggered for {symbol} {position_type} at {current_price}")
+                            logger.info(f"{reason} triggered for {symbol} {position_type} at {exit_price}")
                         else:
                             new_positions.append(position)
 
@@ -845,3 +854,4 @@ stop_loss_thread.start()
 if __name__ == '__main__':
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
+
