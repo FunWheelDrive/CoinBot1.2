@@ -75,13 +75,19 @@ def format_profit(profit):
         # Format based on magnitude
         abs_profit = abs(profit_float)
         if abs_profit >= 1000:
-            return f"{profit_float:+,.0f}"  # +1,234 or -1,234
+            return f"{profit_float:+,.0f}"  # Examples: +1,234 or -1,234
         elif abs_profit >= 1:
-            return f"{profit_float:+,.2f}".replace(".00", "")  +12.34 → +12.34, +12.00 → +12
+            # For values >= 1: show 2 decimals, remove .00 if present
+            formatted = f"{profit_float:+,.2f}"
+            return formatted.replace(".00", "")  # +12.34 stays, +12.00 becomes +12
         elif abs_profit >= 0.01:
-            return f"{profit_float:+,.4f}".rstrip("0").rstrip(".")  +0.12340 → +0.1234
+            # For values between 0.01 and 1: show 4 decimals, strip trailing zeros
+            formatted = f"{profit_float:+,.4f}"
+            return formatted.rstrip("0").rstrip(".")  # +0.12340 becomes +0.1234
         else:
-            return f"{profit_float:+,.6f}".rstrip("0").rstrip(".")  +0.00012340 → +0.0001234
+            # For very small values: show 6 decimals, strip trailing zeros
+            formatted = f"{profit_float:+,.6f}"
+            return formatted.rstrip("0").rstrip(".")  # +0.00012340 becomes +0.0001234
             
     except (ValueError, TypeError) as e:
         logger.error(f"PROFIT FORMAT ERROR - Value: '{profit}' | Type: {type(profit)} | Error: {str(e)}")
