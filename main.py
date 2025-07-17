@@ -63,33 +63,24 @@ def format_profit(profit):
     # Handle all possible falsey/empty cases
     if profit in [None, '', 'None', 'null', 'NaN']:
         return "0.00"
-    
     try:
         # Convert to float - handles strings, ints, decimals
         profit_float = float(profit)
-        
-        # Handle zero specially
         if profit_float == 0:
             return "0.00"
-            
-        # Format based on magnitude
         abs_profit = abs(profit_float)
         if abs_profit >= 1000:
-            return f"{profit_float:+,.0f}"  # Examples: +1,234 or -1,234
+            return f"{profit_float:+,.0f}"
         elif abs_profit >= 1:
-            # For values >= 1: show 2 decimals, remove .00 if present
             formatted = f"{profit_float:+,.2f}"
-            return formatted.replace(".00", "")  # +12.34 stays, +12.00 becomes +12
+            return formatted.replace(".00", "")
         elif abs_profit >= 0.01:
-            # For values between 0.01 and 1: show 4 decimals, strip trailing zeros
             formatted = f"{profit_float:+,.4f}"
-            return formatted.rstrip("0").rstrip(".")  # +0.12340 becomes +0.1234
+            return formatted.rstrip("0").rstrip(".")
         else:
-            # For very small values: show 6 decimals, strip trailing zeros
             formatted = f"{profit_float:+,.6f}"
-            return formatted.rstrip("0").rstrip(".")  # +0.00012340 becomes +0.0001234
-            
-    except (ValueError, TypeError) as e:
+            return formatted.rstrip("0").rstrip(".")
+    except Exception as e:
         logger.error(f"PROFIT FORMAT ERROR - Value: '{profit}' | Type: {type(profit)} | Error: {str(e)}")
         return "--"
         
