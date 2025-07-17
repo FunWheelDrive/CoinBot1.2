@@ -413,32 +413,33 @@ def dashboard():
         </style>
     </head>
     <body>
-    <div class="container mt-4">
-        <div class="mb-4 d-flex align-items-center">
-            <svg class="header-logo" viewBox="0 0 50 50" fill="none">
-                <circle cx="25" cy="25" r="25" fill="#23252e"/>
-                <g>
-                  <circle cx="25" cy="25" r="19.5" fill="#F7931A"/>
-                  <text x="15" y="33" font-size="22" font-family="Arial" font-weight="bold" fill="#fff">₿</text>
-                </g>
-            </svg>
-            <span class="header-title">CoinBot Dashboard</span>
-            <span class="btc-price">
-                <svg class="btc-logo" viewBox="0 0 30 30" width="26" height="26">
-                  <circle cx="15" cy="15" r="14" fill="#F7931A"/>
-                  <text x="8" y="23" font-size="20" font-family="Arial" font-weight="bold" fill="#fff">₿</text>
-                </svg>
-                <span style="color:#F7931A; font-weight:bold; font-size:1.32em; letter-spacing:1px;">{{ btc_price }}</span>
-            </span>
-            <span style="margin-left: 18px;">
-                <a href="{{ url_for('settings', bot=active) }}" class="btn btn-sm btn-warning">Settings</a>
-            </span>
-            <span style="margin-left: 8px;">
-                {% if session.get('settings_auth') %}
-                    <a href="{{ url_for('settings_logout') }}" class="btn btn-sm btn-secondary">Logout</a>
-                {% endif %}
-            </span>
-        </div>
+   <div class="mb-4 d-flex align-items-center">
+    <svg class="header-logo" viewBox="0 0 50 50" fill="none">
+        <circle cx="25" cy="25" r="25" fill="#23252e"/>
+        <g>
+          <circle cx="25" cy="25" r="19.5" fill="#F7931A"/>
+          <text x="15" y="33" font-size="22" font-family="Arial" font-weight="bold" fill="#fff">₿</text>
+        </g>
+    </svg>
+    <img src="{{ url_for('static', filename='COINBO.png') }}" 
+         alt="COINBO Logo" 
+         style="height: 44px; margin-right: 18px;">
+    <span class="btc-price">
+        <svg class="btc-logo" viewBox="0 0 30 30" width="26" height="26">
+          <circle cx="15" cy="15" r="14" fill="#F7931A"/>
+          <text x="8" y="23" font-size="20" font-family="Arial" font-weight="bold" fill="#fff">₿</text>
+        </svg>
+        <span style="color:#F7931A; font-weight:bold; font-size:1.32em; letter-spacing:1px;">{{ btc_price }}</span>
+    </span>
+    <span style="margin-left: 18px;">
+        <a href="{{ url_for('settings', bot=active) }}" class="btn btn-sm btn-warning">Settings</a>
+    </span>
+    <span style="margin-left: 8px;">
+        {% if session.get('settings_auth') %}
+            <a href="{{ url_for('settings_logout') }}" class="btn btn-sm btn-secondary">Logout</a>
+        {% endif %}
+    </span>
+</div>
         <ul class="nav nav-tabs" id="botTabs" role="tablist">
             {% for bot_id, bot_data in dashboards.items() %}
             <li class="nav-item" role="presentation">
