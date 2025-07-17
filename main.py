@@ -56,35 +56,35 @@ def format_volume(volume):
         return "--"
 
 def format_profit(profit):
-    """Safely formats profit values with appropriate decimal places"""
+    """
+    Formats profit values with proper decimal places and error handling
+    Returns "--" for any invalid input
+    """
+    # Handle all possible falsey/empty cases
+    if profit in [None, '', 'None', 'null', 'NaN']:
+        return "0.00"
+    
     try:
-        # Handle all falsey values except 0
-        if profit is None or profit == '':
-            return "0.00"
-            
-        # Convert to float - handles strings, ints, etc.
+        # Convert to float - handles strings, ints, decimals
         profit_float = float(profit)
         
-        # Handle zero case
+        # Handle zero specially
         if profit_float == 0:
             return "0.00"
             
-        # Determine formatting based on magnitude
+        # Format based on magnitude
         abs_profit = abs(profit_float)
-        
         if abs_profit >= 1000:
-            return f"{profit_float:+,.0f}"
+            return f"{profit_float:+,.0f}"  # +1,234 or -1,234
         elif abs_profit >= 1:
-            return f"{profit_float:+,.2f}".replace(".00", "")
+            return f"{profit_float:+,.2f}".replace(".00", "")  +12.34 → +12.34, +12.00 → +12
         elif abs_profit >= 0.01:
-            formatted = f"{profit_float:+,.4f}"
-            return formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
+            return f"{profit_float:+,.4f}".rstrip("0").rstrip(".")  +0.12340 → +0.1234
         else:
-            formatted = f"{profit_float:+,.6f}"
-            return formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
+            return f"{profit_float:+,.6f}".rstrip("0").rstrip(".")  +0.00012340 → +0.0001234
             
-    except Exception as e:
-        logger.error(f"Profit formatting failed: {e} | Input: {profit} | Type: {type(profit)}")
+    except (ValueError, TypeError) as e:
+        logger.error(f"PROFIT FORMAT ERROR - Value: '{profit}' | Type: {type(profit)} | Error: {str(e)}")
         return "--"
         
 app.jinja_env.filters['format_price'] = format_price
