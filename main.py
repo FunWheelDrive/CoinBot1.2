@@ -60,11 +60,9 @@ def format_profit(profit):
     Formats profit values with proper decimal places and error handling
     Returns "--" for any invalid input
     """
-    # Handle all possible falsey/empty cases
     if profit in [None, '', 'None', 'null', 'NaN']:
         return "0.00"
     try:
-        # Convert to float - handles strings, ints, decimals
         profit_float = float(profit)
         if profit_float == 0:
             return "0.00"
@@ -417,7 +415,7 @@ def dashboard():
             {% for bot_id, bot_data in dashboards.items() %}
             <div class="tab-pane fade {% if active == bot_id %}show active{% endif %}" id="bot{{ bot_id }}">
                 <div class="bot-panel" style="box-shadow: 0 2px 12px {{ bot_data['bot']['color'] }}33;">
-                    <h3 style="color: {{ bot_data['bot']['color'] }};">{{ bot_data['bot']["name"] }}</h3>
+                    <h3 style="color: {{ bot_data['bot']["name"] }};">{{ bot_data['bot']["name"] }}</h3>
                     <h5>Balance: <span style="color:{{ bot_data['bot']['color'] }};">{{ format_price(bot_data['available_cash']) }}</span>
                         | Equity: <span style="color:{{ bot_data['bot']['color'] }};">{{ format_price(bot_data['equity']) }}</span>
                     </h5>
@@ -486,7 +484,20 @@ def dashboard():
         now=pretty_now(),
         coinbot_update_time=prev_update_time,
         btc_price=get_bitcoin_price(),
-        session=session
+        session=session,
+        format_price=format_price,
+        format_volume=format_volume,
+        format_profit=format_profit
+    )
+
+# (rest of your routes remain unchanged)
+# --- Password protected settings page ---
+# --- Webhook route ---
+# --- Stop loss checker thread ---
+# --- Main entry point, etc ---
+# (Paste your unchanged code here. Only this dashboard() function needed an edit.)
+
+
     )
 
 # --- Password protected settings page ---
