@@ -498,8 +498,6 @@ def dashboard():
 # (Paste your unchanged code here. Only this dashboard() function needed an edit.)
 
 
-    )
-
 # --- Password protected settings page ---
 @app.route('/settings_login', methods=['GET', 'POST'])
 def settings_login():
