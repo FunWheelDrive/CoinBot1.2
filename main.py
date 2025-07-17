@@ -29,7 +29,7 @@ def format_price(price):
         if price >= 1:
             return f"${price:,.2f}"
         elif price >= 0.01:
-            return f"${price:,.4f}"
+            return f"${price:,.6f}"
         elif price > 0:
             return f"${price:,.8f}"
         else:
@@ -243,9 +243,9 @@ def dashboard():
                 f"<td>{format_price(pos['entry_price'])}</td>"
                 f"<td>{format_price(pos['current_price'])}</td>"
                 f"<td>{pos['leverage']}x</td>"
-                f"<td>${pos['margin_used']:.2f}</td>"
-                f"<td>${pos['position_size']:.2f}</td>"
-                f"<td class='{pos['pl_class']}'>{pos['pnl']:+.2f}</td></tr>"
+                f"<td>{format_price(pos['margin_used'])}</td>"
+                f"<td>{format_price(pos['position_size'])}</td>"
+                f"<td class='{pos['pl_class']}'>{pos['pnl']:+.8f}</td></tr>"
             )
         if not positions_html:
             positions_html = "<tr><td colspan='8'>No open positions</td></tr>"
@@ -254,17 +254,17 @@ def dashboard():
             profit = log.get('profit')
             pl_class = "profit" if profit and profit > 0 else "loss" if profit and profit < 0 else ""
             avg_entry_val = log.get('avg_entry')
-            avg_entry_str = f"{float(avg_entry_val):.2f}" if avg_entry_val not in (None, '') else ''
+            avg_entry_str = f"{float(avg_entry_val):.8f}" if avg_entry_val not in (None, '') else ''
             trade_log_html += (
                 f"<tr><td>{log.get('timestamp', '')}</td>"
                 f"<td>{log.get('action', '')}</td>"
                 f"<td>{log.get('symbol', '')}</td>"
                 f"<td>{log.get('reason', '')}</td>"
-                f"<td>${float(log.get('price', 0)):.2f}</td>"
+                f"<td>{format_price(log.get('price', 0))}</td>"
                 f"<td>{float(log.get('amount', 0)):.6f}</td>"
-                f"<td class='{pl_class}'>{f'{float(profit):+.2f}' if profit is not None else ''}</td>"
+                f"<td class='{pl_class}'>{f'{float(profit):+.8f}' if profit is not None else ''}</td>"
                 f"<td class='{pl_class}'>{log.get('pl_pct', '')}</td>"
-                f"<td>${float(log.get('balance', 0)):.2f}</td>"
+                f"<td>{format_price(log.get('balance', 0))}</td>"
                 f"<td>{log.get('leverage', '')}</td>"
                 f"<td>{avg_entry_str}</td>"
                 f"</tr>"
@@ -277,7 +277,7 @@ def dashboard():
             pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
             coin_stats_html += (
                 f"<tr><td>{coin}</td>"
-                f"<td class='{pl_class}'>{pl:+.2f}</td></tr>"
+                f"<td class='{pl_class}'>{pl:+.8f}</td></tr>"
             )
         if not coin_stats_html:
             coin_stats_html = "<tr><td colspan='2'>No trades yet</td></tr>"
@@ -597,10 +597,10 @@ def webhook():
                 "reason": reason,
                 "price": price,
                 "amount": total_volume,
-                "profit": round(profit, 2),
-                "pl_pct": round(pl_pct, 2),
-                "balance": round(account["balance"], 2),
-                "avg_entry": round(avg_entry, 6),
+                "profit": round(profit, 8),
+                "pl_pct": round(pl_pct, 4),
+                "balance": round(account["balance"], 8),
+                "avg_entry": round(avg_entry, 8),
             })
             save_account(bot_id, account)
             logger.info(f"SELL executed for {symbol} at {price} (bot {bot_id})")
@@ -648,10 +648,10 @@ def check_and_trigger_stop_losses():
                                 "reason": f"Stop Loss ({stop_loss_pct}%)",
                                 "price": current_price,
                                 "amount": volume,
-                                "profit": round(profit, 2),
-                                "balance": round(account["balance"], 2),
+                                "profit": round(profit, 8),
+                                "balance": round(account["balance"], 8),
                                 "leverage": position["leverage"],
-                                "avg_entry": round(entry, 6),
+                                "avg_entry": round(entry, 8),
                             })
                             modified = True
                             logger.info(f"Stop loss triggered for {symbol} at {current_price}")
@@ -675,3 +675,4 @@ stop_loss_thread.start()
 if __name__ == '__main__':
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
+
