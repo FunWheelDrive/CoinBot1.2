@@ -56,10 +56,6 @@ def format_volume(volume):
         return "--"
 
 def format_profit(profit):
-    """
-    Formats profit values with proper decimal places and error handling
-    Returns "--" for any invalid input
-    """
     if profit in [None, '', 'None', 'null', 'NaN']:
         return "0.00"
     try:
@@ -81,14 +77,13 @@ def format_profit(profit):
     except Exception as e:
         logger.error(f"PROFIT FORMAT ERROR - Value: '{profit}' | Type: {type(profit)} | Error: {str(e)}")
         return "--"
-        
+
 app.jinja_env.filters['format_price'] = format_price
 app.jinja_env.filters['format_volume'] = format_volume
 app.jinja_env.filters['format_profit'] = format_profit
 
-# --- Password for settings page ---
+# --- Configuration ---
 SETTINGS_PASSWORD = "bot"  # CHANGE for production!
-
 STARTING_BALANCE = 1000.00
 file_lock = threading.Lock()
 
@@ -114,7 +109,10 @@ BOTS = {
 }
 
 def pretty_now():
-    return datetime.now(ZoneInfo("America/Edmonton")).strftime('%Y-%m-%d %H:%M:%S %Z')
+    try:
+        return datetime.now(ZoneInfo("America/Edmonton")).strftime('%Y-%m-%d %H:%M:%S %Z')
+    except:
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 kraken_pairs = {
     "BTCUSDT": "XBTUSDT",
@@ -132,6 +130,7 @@ kraken_pairs = {
 latest_prices = {}
 last_price_update = {'time': pretty_now(), 'prev_time': pretty_now()}
 
+# --- Core Functions ---
 def fetch_latest_prices(symbols):
     symbols_to_fetch = set(sym for sym in symbols if sym in kraken_pairs)
     symbols_to_fetch.add("BTCUSDT")
@@ -207,10 +206,16 @@ def save_account(bot_id, account):
 
 def load_bot_settings(bot_id):
     settings_file = os.path.join(DATA_DIR, f"settings_{bot_id}.json")
+    default_settings = {"leverage": 5, "stop_loss_pct": 2.5}
     if not os.path.exists(settings_file):
-        return {"leverage": 5, "stop_loss_pct": 2.5}
+        return default_settings
     with open(settings_file, "r") as f:
-        return json.load(f)
+        settings = json.load(f)
+    # Ensure both keys exist
+    for k, v in default_settings.items():
+        if k not in settings:
+            settings[k] = v
+    return settings
 
 def save_bot_settings(bot_id, settings):
     settings_file = os.path.join(DATA_DIR, f"settings_{bot_id}.json")
@@ -234,7 +239,6 @@ def calculate_position_stats(positions, prices):
                 
             position_size = margin_used * leverage
             
-            # Calculate P&L differently for long vs short
             if position_type == "long":
                 pnl = (current_price - entry) * volume
                 stop_loss_price = entry * (1 - stop_loss_pct/100)
@@ -273,6 +277,7 @@ def get_bitcoin_price():
     price = latest_prices.get("BTCUSDT")
     return format_price(price) if price else "--"
 
+# --- Routes ---
 @app.route('/')
 def dashboard():
     active_bot = request.args.get("active", "1.0")
@@ -295,7 +300,6 @@ def dashboard():
         available_cash = float(account["balance"])
         equity = available_cash + total_margin + total_pl
         
-        # --- Build positions_html with proper formatting ---
         positions_html = ""
         for pos in position_stats:
             positions_html += (
@@ -311,7 +315,6 @@ def dashboard():
         if not positions_html:
             positions_html = "<tr><td colspan='8'>No open positions</td></tr>"
             
-        # --- Build trade_log_html with proper formatting ---
         trade_log_html = ""
         for log in reversed(account["trade_log"]):
             profit = log.get('profit')
@@ -428,7 +431,7 @@ def dashboard():
             {% for bot_id, bot_data in dashboards.items() %}
             <div class="tab-pane fade {% if active == bot_id %}show active{% endif %}" id="bot{{ bot_id }}">
                 <div class="bot-panel" style="box-shadow: 0 2px 12px {{ bot_data['bot']['color'] }}33;">
-                    <h3 style="color: {{ bot_data['bot']["name"] }};">{{ bot_data['bot']["name"] }}</h3>
+                    <h3 style="color: {{ bot_data['bot']['color'] }};">{{ bot_data["bot"]["name"] }}</h3>
                     <h5>Balance: <span style="color:{{ bot_data['bot']['color'] }};">{{ format_price(bot_data['available_cash']) }}</span>
                         | Equity: <span style="color:{{ bot_data['bot']['color'] }};">{{ format_price(bot_data['equity']) }}</span>
                     </h5>
@@ -503,15 +506,6 @@ def dashboard():
         format_profit=format_profit
     )
 
-# (rest of your routes remain unchanged)
-# --- Password protected settings page ---
-# --- Webhook route ---
-# --- Stop loss checker thread ---
-# --- Main entry point, etc ---
-# (Paste your unchanged code here. Only this dashboard() function needed an edit.)
-
-
-# --- Password protected settings page ---
 @app.route('/settings_login', methods=['GET', 'POST'])
 def settings_login():
     error = ""
@@ -539,13 +533,58 @@ def settings_logout():
     flash("Logged out.", "info")
     return redirect(url_for('dashboard'))
 
+@app.route('/settings', methods=['GET', 'POST'])
+def settings():
+    if not session.get('settings_auth'):
+        return redirect(url_for('settings_login', bot=request.args.get('bot', '1.0')))
+    
+    bot_id = request.args.get('bot', '1.0')
+    if bot_id not in BOTS:
+        return redirect(url_for('dashboard'))
+    
+    settings = load_bot_settings(bot_id)
+    
+    if request.method == 'POST':
+        try:
+            leverage = int(request.form.get('leverage', 5))
+            stop_loss_pct = float(request.form.get('stop_loss_pct', 2.5))
+            
+            if not (1 <= leverage <= 20):
+                flash("Leverage must be between 1 and 20", "danger")
+            elif not (0.1 <= stop_loss_pct <= 20):
+                flash("Stop loss must be between 0.1% and 20%", "danger")
+            else:
+                save_bot_settings(bot_id, {
+                    'leverage': leverage,
+                    'stop_loss_pct': stop_loss_pct
+                })
+                flash("Settings saved successfully!", "success")
+                return redirect(url_for('settings', bot=bot_id))
+        except ValueError:
+            flash("Invalid input values", "danger")
+    
+    return render_template_string('''
+        <h2>Settings for {{ bot["name"] }}</h2>
+        <form method="POST">
+            <div class="mb-3">
+                <label class="form-label">Leverage</label>
+                <input type="number" name="leverage" value="{{ settings['leverage'] }}" min="1" max="20" class="form-control">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Stop Loss (%)</label>
+                <input type="number" name="stop_loss_pct" value="{{ settings['stop_loss_pct'] }}" step="0.1" min="0.1" max="20" class="form-control">
+            </div>
+            <button type="submit" class="btn btn-primary">Save</button>
+            <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Cancel</a>
+        </form>
+    ''', bot=BOTS[bot_id], settings=settings)
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
         data = request.get_json()
         logger.info(f"Webhook received: {data}")
 
-        # Bot selection
         bot_raw = str(data.get("bot", "")).strip().lower()
         bot_id = bot_raw.replace("coinbot", "").replace(" ", "") if bot_raw.startswith("coinbot") else bot_raw
         if bot_id not in BOTS:
@@ -559,13 +598,11 @@ def webhook():
         if not symbol:
             return jsonify({"status": "error", "message": "Missing symbol"}), 400
 
-        # --- Fetch settings for this bot ---
         settings = load_bot_settings(bot_id)
         leverage = settings.get("leverage", 5)
         stop_loss_pct = settings.get("stop_loss_pct", 2.5)
-        margin_pct = 0.05  # 5% of balance per trade
+        margin_pct = 0.05
 
-        # --- Get current price ---
         price = get_kraken_price(symbol)
         if not price or price <= 0:
             fetch_latest_prices([symbol])
@@ -577,20 +614,17 @@ def webhook():
         timestamp = pretty_now()
         reason = data.get("reason", "TradingView signal")
 
-        if action in ["buy", "short"]:  # Opening positions
+        if action in ["buy", "short"]:
             margin_used = account["balance"] * margin_pct
 
             if margin_used <= 0:
                 return jsonify({"status": "error", "message": "Insufficient balance for allocation"}), 400
 
-            # Calculate volume to buy/short
             volume = round((margin_used * leverage) / price, 6)
 
-            # Position limits check
             if len(account["positions"].get(symbol, [])) >= 5:
                 return jsonify({"status": "error", "message": "Position limit reached"}), 400
 
-            # Create new position with stop loss info
             new_position = {
                 "type": "long" if action == "buy" else "short",
                 "volume": volume,
@@ -625,7 +659,7 @@ def webhook():
                 "stop_loss_price": new_position["stop_loss_price"]
             }), 200
 
-        elif action in ["sell", "cover"]:  # Closing positions
+        elif action in ["sell", "cover"]:
             positions = [p for p in account["positions"].get(symbol, []) 
                         if (action == "sell" and p["type"] == "long") or 
                            (action == "cover" and p["type"] == "short")]
@@ -637,19 +671,17 @@ def webhook():
             total_margin = sum(float(p["margin_used"]) for p in positions)
             avg_entry = sum(float(p["entry_price"]) * float(p["volume"]) for p in positions) / total_volume if total_volume > 0 else 0
             
-            # Calculate profit differently for long vs short
-            if action == "sell":  # Closing long position
+            if action == "sell":
                 profit = (price - avg_entry) * total_volume
-            else:  # Closing short position
+            else:
                 profit = (avg_entry - price) * total_volume
                 
             pl_pct = ((price - avg_entry) / avg_entry * 100) if avg_entry > 0 else 0
             if action == "cover":
-                pl_pct = -pl_pct  # Invert for short positions
+                pl_pct = -pl_pct
 
             account["balance"] += total_margin + profit
             
-            # Remove the closed positions
             account["positions"][symbol] = [p for p in account["positions"].get(symbol, []) 
                                           if p not in positions]
             
@@ -674,7 +706,7 @@ def webhook():
     except Exception as e:
         logger.error(f"Webhook processing failed: {str(e)}", exc_info=True)
         return jsonify({"status": "error", "message": "Internal server error"}), 500
-# --- BACKGROUND STOP LOSS CHECKER ---
+
 def check_and_trigger_stop_losses():
     while True:
         try:
@@ -695,19 +727,17 @@ def check_and_trigger_stop_losses():
                             stop_loss_price = position.get("stop_loss_price", 
                                                         position["entry_price"] * (1 - position.get("stop_loss_pct", 2.5)/100))
                             trigger_condition = current_price <= stop_loss_price
-                        else:  # short position
+                        else:
                             stop_loss_price = position.get("stop_loss_price", 
                                                         position["entry_price"] * (1 + position.get("stop_loss_pct", 2.5)/100))
                             trigger_condition = current_price >= stop_loss_price
                         
                         if trigger_condition:
-                            # Trigger stop loss
                             volume = float(position["volume"])
                             margin_used = float(position["margin_used"])
                             entry = float(position["entry_price"])
                             stop_loss_pct = float(position.get("stop_loss_pct", 2.5))
                             
-                            # Calculate profit differently for long vs short
                             if position_type == "long":
                                 profit = (current_price - entry) * volume
                             else:
@@ -744,8 +774,6 @@ def check_and_trigger_stop_losses():
         
         time.sleep(2)
 
-
-# --- Start Background Thread ---
 stop_loss_thread = threading.Thread(target=check_and_trigger_stop_losses, daemon=True)
 stop_loss_thread.start()
 
