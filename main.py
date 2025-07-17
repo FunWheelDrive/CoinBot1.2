@@ -759,14 +759,15 @@ def webhook():
 def check_and_trigger_stop_losses():
     while True:
         try:
-             all_symbols = set()
+            # Fetch fresh prices for all symbols with open positions
+            all_symbols = set()
             for bot_id in BOTS:
                 account = load_account(bot_id)
                 all_symbols.update(account["positions"].keys())
             if all_symbols:
                 fetch_latest_prices(list(all_symbols))
-            
-        for bot_id in BOTS:
+
+            for bot_id in BOTS:
                 account = load_account(bot_id)
                 modified = False
 
@@ -777,8 +778,12 @@ def check_and_trigger_stop_losses():
                     new_positions = []
                     for position in positions:
                         position_type = position.get("type", "long")
-                        stop_loss_price = position.get("stop_loss_price",
-                                                    position["entry_price"] * (1 - position.get("stop_loss_pct", 2.5)/100) if position_type == "long" else position["entry_price"] * (1 + position.get("stop_loss_pct", 2.5)/100))
+                        stop_loss_price = position.get(
+                            "stop_loss_price",
+                            position["entry_price"] * (1 - position.get("stop_loss_pct", 2.5) / 100)
+                            if position_type == "long"
+                            else position["entry_price"] * (1 + position.get("stop_loss_pct", 2.5) / 100)
+                        )
                         take_profit_price = position.get("take_profit_price")
                         take_profit_pct = position.get("take_profit_pct", 3.0)
                         entry = float(position.get("entry_price", 0))
