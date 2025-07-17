@@ -177,6 +177,14 @@ def load_account(bot_id):
         account["balance"] = float(account.get("balance", STARTING_BALANCE))
         account["positions"] = account.get("positions", {})
         account["trade_log"] = account.get("trade_log", [])
+
+        # Patch: set missing "type" to "long"
+        for symbol in account["positions"]:
+            for position in account["positions"][symbol]:
+                if "type" not in position:
+                    position["type"] = "long"
+
+        # Now cast all fields to correct types
         for symbol in account["positions"]:
             for position in account["positions"][symbol]:
                 position["volume"] = float(position.get("volume", 0))
@@ -185,6 +193,7 @@ def load_account(bot_id):
                 position["margin_used"] = float(position.get("margin_used", 0))
                 position["stop_loss_pct"] = float(position.get("stop_loss_pct", 2.5))
         return account
+
     except Exception as e:
         logger.error(f"Error loading account {bot_id}: {str(e)}")
         return {
@@ -192,6 +201,7 @@ def load_account(bot_id):
             "positions": {},
             "trade_log": []
         }
+
 
 def save_account(bot_id, account):
     data_file = BOTS[bot_id]["data_file"]
