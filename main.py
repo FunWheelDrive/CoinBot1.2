@@ -61,15 +61,16 @@ def format_profit(profit):
         if abs(profit) >= 1000:
             return f"{profit:+,.0f}"
         elif abs(profit) >= 1:
-            return f"{profit:+,.2f}"
+            return f"{profit:+,.2f}".rstrip("0").rstrip(".")
         elif abs(profit) >= 0.01:
-            return f"{profit:+,.4f}"
+            return f"{profit:+,.4f}".rstrip("0").rstrip(".")
         elif profit != 0:
-            return f"{profit:+,.6f}"
+            return f"{profit:+,.6f}".rstrip("0").rstrip(".")
         else:
             return "0.00"
     except Exception:
         return "--"
+
 
 app.jinja_env.filters['format_price'] = format_price
 app.jinja_env.filters['format_volume'] = format_volume
