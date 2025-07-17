@@ -22,14 +22,16 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key")
 
-# --- Jinja price format filter (also use as Python function below) ---
+# --- Formatting functions ---
 def format_price(price):
     try:
         price = float(price)
-        if price >= 1:
+        if price >= 1000:
+            return f"${price:,.0f}"
+        elif price >= 1:
             return f"${price:,.2f}"
         elif price >= 0.01:
-            return f"${price:,.6f}"
+            return f"${price:,.4f}"
         elif price > 0:
             return f"${price:,.8f}"
         else:
@@ -37,7 +39,41 @@ def format_price(price):
     except Exception:
         return "--"
 
+def format_volume(volume):
+    try:
+        volume = float(volume)
+        if volume >= 1000:
+            return f"{volume:,.0f}"
+        elif volume >= 1:
+            return f"{volume:,.2f}"
+        elif volume >= 0.01:
+            return f"{volume:,.4f}"
+        elif volume > 0:
+            return f"{volume:,.6f}"
+        else:
+            return "0.00"
+    except Exception:
+        return "--"
+
+def format_profit(profit):
+    try:
+        profit = float(profit)
+        if abs(profit) >= 1000:
+            return f"{profit:+,.0f}"
+        elif abs(profit) >= 1:
+            return f"{profit:+,.2f}"
+        elif abs(profit) >= 0.01:
+            return f"{profit:+,.4f}"
+        elif profit != 0:
+            return f"{profit:+,.6f}"
+        else:
+            return "0.00"
+    except Exception:
+        return "--"
+
 app.jinja_env.filters['format_price'] = format_price
+app.jinja_env.filters['format_volume'] = format_volume
+app.jinja_env.filters['format_profit'] = format_profit
 
 # --- Password for settings page ---
 SETTINGS_PASSWORD = "bot"  # CHANGE for production!
@@ -211,7 +247,7 @@ def calculate_coin_stats(trade_log):
 
 def get_bitcoin_price():
     price = latest_prices.get("BTCUSDT")
-    return f"${price:,.2f}" if price else "--"
+    return format_price(price) if price else "--"
 
 @app.route('/')
 def dashboard():
@@ -234,35 +270,39 @@ def dashboard():
         total_pl = sum(pos['pnl'] for pos in position_stats)
         available_cash = float(account["balance"])
         equity = available_cash + total_margin + total_pl
-        # --- Build positions_html using format_price for prices ---
+        
+        # --- Build positions_html with proper formatting ---
         positions_html = ""
         for pos in position_stats:
             positions_html += (
                 f"<tr><td>{pos['symbol']}</td>"
-                f"<td>{pos['volume']:.6f}</td>"
+                f"<td>{format_volume(pos['volume'])}</td>"
                 f"<td>{format_price(pos['entry_price'])}</td>"
                 f"<td>{format_price(pos['current_price'])}</td>"
                 f"<td>{pos['leverage']}x</td>"
                 f"<td>{format_price(pos['margin_used'])}</td>"
                 f"<td>{format_price(pos['position_size'])}</td>"
-                f"<td class='{pos['pl_class']}'>{pos['pnl']:+.8f}</td></tr>"
+                f"<td class='{pos['pl_class']}'>{format_profit(pos['pnl'])}</td></tr>"
             )
         if not positions_html:
             positions_html = "<tr><td colspan='8'>No open positions</td></tr>"
+            
+        # --- Build trade_log_html with proper formatting ---
         trade_log_html = ""
         for log in reversed(account["trade_log"]):
             profit = log.get('profit')
-            pl_class = "profit" if profit and profit > 0 else "loss" if profit and profit < 0 else ""
+            pl_class = "profit" if profit and float(profit) > 0 else "loss" if profit and float(profit) < 0 else ""
             avg_entry_val = log.get('avg_entry')
-            avg_entry_str = f"{float(avg_entry_val):.8f}" if avg_entry_val not in (None, '') else ''
+            avg_entry_str = format_price(avg_entry_val) if avg_entry_val not in (None, '') else ''
+            
             trade_log_html += (
                 f"<tr><td>{log.get('timestamp', '')}</td>"
                 f"<td>{log.get('action', '')}</td>"
                 f"<td>{log.get('symbol', '')}</td>"
                 f"<td>{log.get('reason', '')}</td>"
                 f"<td>{format_price(log.get('price', 0))}</td>"
-                f"<td>{float(log.get('amount', 0)):.6f}</td>"
-                f"<td class='{pl_class}'>{f'{float(profit):+.8f}' if profit is not None else ''}</td>"
+                f"<td>{format_volume(log.get('amount', 0))}</td>"
+                f"<td class='{pl_class}'>{format_profit(profit) if profit is not None else ''}</td>"
                 f"<td class='{pl_class}'>{log.get('pl_pct', '')}</td>"
                 f"<td>{format_price(log.get('balance', 0))}</td>"
                 f"<td>{log.get('leverage', '')}</td>"
@@ -271,16 +311,18 @@ def dashboard():
             )
         if not trade_log_html:
             trade_log_html = "<tr><td colspan='11'>No trades yet</td></tr>"
+            
         coin_stats = calculate_coin_stats(account["trade_log"])
         coin_stats_html = ""
         for coin, pl in sorted(coin_stats.items()):
             pl_class = "profit" if pl > 0 else "loss" if pl < 0 else ""
             coin_stats_html += (
                 f"<tr><td>{coin}</td>"
-                f"<td class='{pl_class}'>{pl:+.8f}</td></tr>"
+                f"<td class='{pl_class}'>{format_profit(pl)}</td></tr>"
             )
         if not coin_stats_html:
             coin_stats_html = "<tr><td colspan='2'>No trades yet</td></tr>"
+            
         dashboards[bot_id] = {
             'bot': bot_cfg,
             'account': account,
@@ -363,10 +405,10 @@ def dashboard():
             <div class="tab-pane fade {% if active == bot_id %}show active{% endif %}" id="bot{{ bot_id }}">
                 <div class="bot-panel" style="box-shadow: 0 2px 12px {{ bot_data['bot']['color'] }}33;">
                     <h3 style="color: {{ bot_data['bot']['color'] }};">{{ bot_data['bot']["name"] }}</h3>
-                    <h5>Balance: <span style="color:{{ bot_data['bot']['color'] }};">${{ bot_data['available_cash']|round(2) }}</span>
-                        | Equity: <span style="color:{{ bot_data['bot']['color'] }};">${{ bot_data['equity']|round(2) }}</span>
+                    <h5>Balance: <span style="color:{{ bot_data['bot']['color'] }};">{{ format_price(bot_data['available_cash']) }}</span>
+                        | Equity: <span style="color:{{ bot_data['bot']['color'] }};">{{ format_price(bot_data['equity']) }}</span>
                     </h5>
-                    <h6>Total P/L: <span class="{% if bot_data['total_pl'] > 0 %}profit{% elif bot_data['total_pl'] < 0 %}loss{% endif %}">${{ '{0:.2f}'.format(bot_data['total_pl']) }}</span></h6>
+                    <h6>Total P/L: <span class="{% if bot_data['total_pl'] > 0 %}profit{% elif bot_data['total_pl'] < 0 %}loss{% endif %}">{{ format_price(bot_data['total_pl']) }}</span></h6>
                     <h5 class="mt-4 mb-2">Open Positions</h5>
                     <table class="table table-sm table-striped">
                         <thead>
@@ -675,4 +717,3 @@ stop_loss_thread.start()
 if __name__ == '__main__':
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
-
