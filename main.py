@@ -117,14 +117,19 @@ def pretty_now():
 kraken_pairs = {
     "BTCUSDT": "XBTUSDT",
     "ETHUSDT": "ETHUSDT",
-    "SOLUSDT": "SOLUSDT",
-    "DOGEUSDT": "DOGEUSDT",
-    "AVAXUSDT": "AVAXUSDT",
-    "MATICUSDT": "MATICUSDT",
-    "ADAUSDT": "ADAUSDT",
-    "LTCUSDT": "LTCUSDT",
-    "DOTUSDT": "DOTUSDT",
+    "SOLUSDT": "SOLUSD",
+    "DOGEUSDT": "XDGUSD",
+    "AVAXUSDT": "AVAXUSD",
+    "MATICUSDT": "MATICUSD",
+    "ADAUSDT": "ADAUSD",
+    "LTCUSDT": "LTCUSD",
+    "DOTUSDT": "DOTUSD",
     "PEPEUSD": "PEPEUSD",
+    "XRPUSDT": "XRPUSD",
+    "BCHUSDT": "BCHUSD",
+    "TRXUSDT": "TRXUSD",
+    "LINKUSDT": "LINKUSD",
+    "ATOMUSDT": "ATOMUSD",
 }
 
 latest_prices = {}
