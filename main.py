@@ -183,13 +183,10 @@ def load_account(bot_id):
         account["positions"] = account.get("positions", {})
         account["trade_log"] = account.get("trade_log", [])
 
-        # Patch: set missing "type" to "long"
         for symbol in account["positions"]:
             for position in account["positions"][symbol]:
                 if "type" not in position:
                     position["type"] = "long"
-
-        # Now cast all fields to correct types
         for symbol in account["positions"]:
             for position in account["positions"][symbol]:
                 position["volume"] = float(position.get("volume", 0))
@@ -221,14 +218,19 @@ def save_account(bot_id, account):
         logger.error(f"Error saving account {bot_id}: {str(e)}")
         raise
 
+# --- PATCH: Settings now include buy_hours
 def load_bot_settings(bot_id):
     settings_file = os.path.join(DATA_DIR, f"settings_{bot_id}.json")
-    default_settings = {"leverage": 5, "stop_loss_pct": 2.5, "take_profit_pct": 3.0}
+    default_settings = {
+        "leverage": 5,
+        "stop_loss_pct": 2.5,
+        "take_profit_pct": 3.0,
+        "buy_hours": "00:00-23:59"
+    }
     if not os.path.exists(settings_file):
         return default_settings
     with open(settings_file, "r") as f:
         settings = json.load(f)
-    # Ensure all keys exist
     for k, v in default_settings.items():
         if k not in settings:
             settings[k] = v
@@ -238,6 +240,27 @@ def save_bot_settings(bot_id, settings):
     settings_file = os.path.join(DATA_DIR, f"settings_{bot_id}.json")
     with open(settings_file, "w") as f:
         json.dump(settings, f, indent=2)
+
+# --- PATCH: Buy time window logic
+def is_in_buy_window(now_time, buy_hours_str):
+    import re
+    if not buy_hours_str.strip():
+        return True  # No restriction
+    time_ranges = [part.strip() for part in buy_hours_str.split(",") if part.strip()]
+    for rng in time_ranges:
+        m = re.match(r"^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$", rng)
+        if not m:
+            continue
+        h1, m1, h2, m2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        t1 = datetime.strptime(f"{h1:02d}:{m1:02d}", "%H:%M").time()
+        t2 = datetime.strptime(f"{h2:02d}:{m2:02d}", "%H:%M").time()
+        if t1 <= t2:
+            if t1 <= now_time <= t2:
+                return True
+        else:
+            if now_time >= t1 or now_time <= t2:
+                return True
+    return False
 
 # --- Calculation Functions ---
 def calculate_position_stats(positions, prices):
@@ -262,7 +285,7 @@ def calculate_position_stats(positions, prices):
                 pnl = (current_price - entry) * volume
                 stop_loss_price = entry * (1 - stop_loss_pct/100)
                 take_profit_price = entry * (1 + take_profit_pct/100)
-            else:  # short
+            else:
                 pnl = (entry - current_price) * volume
                 stop_loss_price = entry * (1 + stop_loss_pct/100)
                 take_profit_price = entry * (1 - take_profit_pct/100)
@@ -581,7 +604,7 @@ def settings():
             leverage = int(request.form.get('leverage', 5))
             stop_loss_pct = float(request.form.get('stop_loss_pct', 2.5))
             take_profit_pct = float(request.form.get('take_profit_pct', 3.0))
-
+            buy_hours = request.form.get('buy_hours', '00:00-23:59').strip()
             if not (1 <= leverage <= 20):
                 flash("Leverage must be between 1 and 20", "danger")
             elif not (0.1 <= stop_loss_pct <= 20):
@@ -592,12 +615,15 @@ def settings():
                 save_bot_settings(bot_id, {
                     'leverage': leverage,
                     'stop_loss_pct': stop_loss_pct,
-                    'take_profit_pct': take_profit_pct
+                    'take_profit_pct': take_profit_pct,
+                    'buy_hours': buy_hours
                 })
                 flash("Settings saved successfully!", "success")
                 return redirect(url_for('settings', bot=bot_id))
         except ValueError:
             flash("Invalid input values", "danger")
+
+    buy_hours_help = "Example: 09:00-16:00,19:00-22:00 (leave blank for 24h trading). Multiple time windows comma-separated. Uses local time."
 
     return render_template_string('''
         <h2>Settings for {{ bot["name"] }}</h2>
@@ -614,10 +640,15 @@ def settings():
                 <label class="form-label">Take Profit (%)</label>
                 <input type="number" name="take_profit_pct" value="{{ settings['take_profit_pct'] }}" step="0.1" min="0.1" max="50" class="form-control">
             </div>
+            <div class="mb-3">
+                <label class="form-label">Allowed Buy Hours (local time)</label>
+                <input type="text" name="buy_hours" value="{{ settings['buy_hours'] }}" class="form-control">
+                <div style="font-size:0.94em;color:#999;margin-top:2px;">{{ buy_hours_help }}</div>
+            </div>
             <button type="submit" class="btn btn-primary">Save</button>
             <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Cancel</a>
         </form>
-    ''', bot=BOTS[bot_id], settings=settings)
+    ''', bot=BOTS[bot_id], settings=settings, buy_hours_help=buy_hours_help)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -643,6 +674,15 @@ def webhook():
         stop_loss_pct = settings.get("stop_loss_pct", 2.5)
         take_profit_pct = settings.get("take_profit_pct", 3.0)
         margin_pct = 0.05
+        buy_hours_str = settings.get("buy_hours", "00:00-23:59")
+
+        if action in ["buy", "short"]:
+            now_local = datetime.now(ZoneInfo("America/Edmonton")).time()
+            if not is_in_buy_window(now_local, buy_hours_str):
+                return jsonify({
+                    "status": "error",
+                    "message": f"Buying/shorting for this bot is not allowed at this hour. Allowed buy windows: '{buy_hours_str}'"
+                }), 400
 
         price = get_kraken_price(symbol)
         if not price or price <= 0:
@@ -666,12 +706,11 @@ def webhook():
             if len(account["positions"].get(symbol, [])) >= 5:
                 return jsonify({"status": "error", "message": "Position limit reached"}), 400
 
-            # Set stop loss and take profit prices
             if action == "buy":
                 stop_loss_price = price * (1 - stop_loss_pct/100)
                 take_profit_price = price * (1 + take_profit_pct/100)
                 position_type = "long"
-            else:  # short
+            else:
                 stop_loss_price = price * (1 + stop_loss_pct/100)
                 take_profit_price = price * (1 - take_profit_pct/100)
                 position_type = "short"
@@ -764,7 +803,6 @@ def webhook():
 def check_and_trigger_stop_losses():
     while True:
         try:
-            # Fetch fresh prices for all symbols with open positions
             all_symbols = set()
             for bot_id in BOTS:
                 account = load_account(bot_id)
@@ -797,7 +835,6 @@ def check_and_trigger_stop_losses():
                         stop_loss_pct = float(position.get("stop_loss_pct", 2.5))
                         leverage = int(position.get("leverage", 1))
 
-                        # Stop loss/take profit logic (THIS IS UPDATED)
                         if position_type == "long":
                             stop_loss_trigger = current_price <= stop_loss_price
                             take_profit_trigger = take_profit_price is not None and current_price >= take_profit_price
@@ -806,7 +843,6 @@ def check_and_trigger_stop_losses():
                             take_profit_trigger = take_profit_price is not None and current_price <= take_profit_price
 
                         if stop_loss_trigger or take_profit_trigger:
-                            # ---- PATCH: Always close at the original stop_loss/take_profit price ----
                             if stop_loss_trigger:
                                 exit_price = stop_loss_price
                                 reason = f"Stop Loss ({stop_loss_pct}%)"
@@ -859,4 +895,5 @@ stop_loss_thread.start()
 if __name__ == '__main__':
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
+
 
