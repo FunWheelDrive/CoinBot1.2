@@ -7,6 +7,7 @@ import os
 import threading
 import logging
 import time
+from collections import defaultdict
 
 # --- Logging setup ---
 logging.basicConfig(
@@ -323,6 +324,16 @@ def get_bitcoin_price():
     price = latest_prices.get("BTCUSDT")
     return format_price(price) if price else "--"
 
+# --- GROUP TRADE LOGS BY DAY (new feature) ---
+def group_trades_by_date(trade_log):
+    trades_by_date = defaultdict(list)
+    for log in trade_log:
+        ts = log.get('timestamp')
+        if ts:
+            date_str = ts.split()[0]  # get YYYY-MM-DD from "YYYY-MM-DD HH:MM"
+            trades_by_date[date_str].append(log)
+    return dict(sorted(trades_by_date.items(), reverse=True))
+
 # --- Routes ---
 @app.route('/')
 def dashboard():
@@ -365,29 +376,36 @@ def dashboard():
         if not positions_html:
             positions_html = "<tr><td colspan='12'>No open positions</td></tr>"
 
-        trade_log_html = ""
-        for log in reversed(account["trade_log"]):
-            profit = log.get('profit')
-            pl_class = "profit" if profit and float(profit) > 0 else "loss" if profit and float(profit) < 0 else ""
-            avg_entry_val = log.get('avg_entry')
-            avg_entry_str = format_price(avg_entry_val) if avg_entry_val not in (None, '') else ''
+        # --- NEW TRADE LOG TABBED HTML ---
+        grouped_trades = group_trades_by_date(account["trade_log"])
+        last_7_days = list(grouped_trades.keys())[:7]  # Show last 7 days (today + prev 6)
 
-            trade_log_html += (
-                f"<tr><td>{log.get('timestamp', '')}</td>"
-                f"<td>{log.get('action', '')}</td>"
-                f"<td>{log.get('symbol', '')}</td>"
-                f"<td>{log.get('reason', '')}</td>"
-                f"<td>{format_price(log.get('price', 0))}</td>"
-                f"<td>{format_volume(log.get('amount', 0))}</td>"
-                f"<td class='{pl_class}'>{format_profit(profit) if profit is not None else ''}</td>"
-                f"<td class='{pl_class}'>{log.get('pl_pct', '')}</td>"
-                f"<td>{format_price(log.get('balance', 0))}</td>"
-                f"<td>{log.get('leverage', '')}</td>"
-                f"<td>{avg_entry_str}</td>"
-                f"</tr>"
-            )
-        if not trade_log_html:
-            trade_log_html = "<tr><td colspan='11'>No trades yet</td></tr>"
+        trade_log_by_day_html = {}
+        for d in last_7_days:
+            logs = grouped_trades[d]
+            rows = ""
+            for log in reversed(logs):  # Show newest first
+                profit = log.get('profit')
+                pl_class = "profit" if profit and float(profit) > 0 else "loss" if profit and float(profit) < 0 else ""
+                avg_entry_val = log.get('avg_entry')
+                avg_entry_str = format_price(avg_entry_val) if avg_entry_val not in (None, '') else ''
+                rows += (
+                    f"<tr><td>{log.get('timestamp', '')}</td>"
+                    f"<td>{log.get('action', '')}</td>"
+                    f"<td>{log.get('symbol', '')}</td>"
+                    f"<td>{log.get('reason', '')}</td>"
+                    f"<td>{format_price(log.get('price', 0))}</td>"
+                    f"<td>{format_volume(log.get('amount', 0))}</td>"
+                    f"<td class='{pl_class}'>{format_profit(profit) if profit is not None else ''}</td>"
+                    f"<td class='{pl_class}'>{log.get('pl_pct', '')}</td>"
+                    f"<td>{format_price(log.get('balance', 0))}</td>"
+                    f"<td>{log.get('leverage', '')}</td>"
+                    f"<td>{avg_entry_str}</td>"
+                    f"</tr>"
+                )
+            if not rows:
+                rows = "<tr><td colspan='11'>No trades for this day</td></tr>"
+            trade_log_by_day_html[d] = rows
 
         coin_stats = calculate_coin_stats(account["trade_log"])
         coin_stats_html = ""
@@ -408,7 +426,9 @@ def dashboard():
             'total_pl': total_pl,
             'coin_stats_html': coin_stats_html,
             'positions_html': positions_html,
-            'trade_log_html': trade_log_html
+            # --- New trade log by day feature ---
+            'trade_log_by_day_html': trade_log_by_day_html,
+            'trade_days': last_7_days,
         }
 
     html = '''
@@ -509,27 +529,49 @@ def dashboard():
                         {{ bot_data['positions_html']|safe }}
                         </tbody>
                     </table>
-                    <h5 class="mt-4 mb-2">Trade Log</h5>
-                    <table class="table table-sm table-striped">
-                        <thead>
-                            <tr>
-                                <th>Time</th>
-                                <th>Action</th>
-                                <th>Symbol</th>
-                                <th>Reason</th>
-                                <th>Price</th>
-                                <th>Amount</th>
-                                <th>Profit</th>
-                                <th>P/L %</th>
-                                <th>Balance</th>
-                                <th>Leverage</th>
-                                <th>Avg Entry</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                        {{ bot_data['trade_log_html']|safe }}
-                        </tbody>
-                    </table>
+                    <h5 class="mt-4 mb-2">Trade Log (by day)</h5>
+                    <ul class="nav nav-tabs" id="dayTabs{{ bot_id }}" role="tablist">
+                        {% for d in bot_data['trade_days'] %}
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link {% if loop.first %}active{% endif %}"
+                                    id="tab-{{ bot_id }}-{{ d }}"
+                                    data-bs-toggle="tab"
+                                    data-bs-target="#day-{{ bot_id }}-{{ d }}"
+                                    type="button"
+                                    role="tab"
+                                    aria-controls="day-{{ bot_id }}-{{ d }}"
+                                    aria-selected="{{ 'true' if loop.first else 'false' }}">
+                                    {{ d }}
+                                </button>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                    <div class="tab-content" id="tabContent-{{ bot_id }}">
+                        {% for d in bot_data['trade_days'] %}
+                        <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="day-{{ bot_id }}-{{ d }}" role="tabpanel">
+                            <table class="table table-sm table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Action</th>
+                                        <th>Symbol</th>
+                                        <th>Reason</th>
+                                        <th>Price</th>
+                                        <th>Amount</th>
+                                        <th>Profit</th>
+                                        <th>P/L %</th>
+                                        <th>Balance</th>
+                                        <th>Leverage</th>
+                                        <th>Avg Entry</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {{ bot_data['trade_log_by_day_html'][d]|safe }}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% endfor %}
+                    </div>
                     <h5 class="mt-4 mb-2">Coin P/L Summary</h5>
                     <table class="table table-sm">
                         <tr><th>Coin</th><th>Total P/L</th></tr>
@@ -895,5 +937,6 @@ stop_loss_thread.start()
 if __name__ == '__main__':
     logger.info("Starting Flask server on port 5000")
     app.run(host='0.0.0.0', port=5000, threaded=True)
+
 
 
