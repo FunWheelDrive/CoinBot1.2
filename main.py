@@ -469,9 +469,9 @@ def dashboard():
             if kill_switch_equity_open.get(bot_id, {}).get('date') != today:
                 kill_switch_equity_open[bot_id] = {'date': today, 'open': equity}
             starting_equity = kill_switch_equity_open[bot_id]['open'] or equity
-            loss_pct = ((starting_equity - equity) / starting_equity * 100) if starting_equity > 0 else 0
+            equity_change_pct = ((equity - starting_equity) / starting_equity * 100) if starting_equity > 0 else 0
             kill_switch_status = load_kill_switch_state(bot_id)
-            kill_switch_color = "red" if kill_switch_status["active"] else "yellow" if kill_switch_breach_start.get(bot_id) else "green"
+            kill_switch_color = "red" if kill_switch_status["active"] else "green" if equity_change_pct >= 0 else "red"
             breach_time_remaining = 0
             if kill_switch_breach_start.get(bot_id):
                 breach_duration = (datetime.now(ZoneInfo("America/Edmonton")) - kill_switch_breach_start[bot_id]).total_seconds()
@@ -549,7 +549,7 @@ def dashboard():
             'trade_days': last_7_days,
             'kill_switch_status': kill_switch_status,
             'kill_switch_color': kill_switch_color,
-            'loss_pct': round(loss_pct, 2),
+            'equity_change_pct': round(equity_change_pct, 2),
             'breach_time_remaining': int(breach_time_remaining)
         }
 
@@ -578,7 +578,6 @@ def dashboard():
             .profit { color: #18e198; font-weight: bold;}
             .loss { color: #fd4561; font-weight: bold;}
             .kill-switch-green { color: #18e198; }
-            .kill-switch-yellow { color: #FACB39; }
             .kill-switch-red { color: #fd4561; }
             table { background: rgba(19,21,32,0.92); border-radius: 13px; overflow: hidden; margin-bottom: 22px; box-shadow: 0 2px 16px #0003;}
             th, td { padding: 10px 7px; text-align: center; border-bottom: 1px solid #24273a;}
@@ -638,9 +637,13 @@ def dashboard():
                             <a href="{{ url_for('reset_kill_switch', bot=bot_id, reset_uuid=bot_data['kill_switch_status']['reset_uuid']) }}"
                                class="btn btn-sm btn-danger ms-2">Reset</a>
                         {% elif bot_data['breach_time_remaining'] > 0 %}
-                            Breach Detected ({{ bot_data['loss_pct'] }}% loss, {{ bot_data['breach_time_remaining'] }}s remaining)
+                            Breach Detected ({{ bot_data['equity_change_pct']|format_profit }}% equity change, {{ bot_data['breach_time_remaining'] }}s remaining)
                         {% else %}
-                            Normal ({{ bot_data['loss_pct'] }}% loss)
+                            {% if bot_data['equity_change_pct'] >= 0 %}
+                                In Profit ({{ bot_data['equity_change_pct']|format_profit }}%)
+                            {% else %}
+                                In Loss ({{ bot_data['equity_change_pct']|format_profit }}%)
+                            {% endif %}
                         {% endif %}
                     </span></h6>
                     <h5 class="mt-4 mb-2">Open Positions</h5>
