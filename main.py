@@ -30,7 +30,6 @@ MAX_STALE_PRICE = 600      # 10 minute price expiry (seconds)
 
 # --- Kill Switch State ---
 kill_switch_lock = threading.Lock()
-kill_switch_state = {}  # bot_id -> {'active': bool, 'reset_uuid': str}
 kill_switch_equity_open = {}  # bot_id -> {'date': str, 'open': float}
 kill_switch_breach_start = {}  # bot_id -> datetime or None
 
@@ -152,16 +151,26 @@ last_price_update_dt = datetime.now(ZoneInfo("America/Edmonton"))
 # --- Kill Switch Functions ---
 def load_kill_switch_state(bot_id):
     kill_switch_file = BOTS[bot_id]["kill_switch_file"]
+    default_state = {
+        "active": False,
+        "reset_uuid": str(uuid.uuid4()),
+        "starting_equity": None,
+        "starting_equity_date": None
+    }
     if not os.path.exists(kill_switch_file):
-        return {"active": False, "reset_uuid": str(uuid.uuid4())}
+        return default_state
     try:
         with file_lock:
             with open(kill_switch_file, "r") as f:
                 state = json.load(f)
+        # Ensure all required keys exist
+        for key, value in default_state.items():
+            if key not in state:
+                state[key] = value
         return state
     except Exception as e:
         logger.error(f"Error loading kill switch state {bot_id}: {str(e)}")
-        return {"active": False, "reset_uuid": str(uuid.uuid4())}
+        return default_state
 
 def save_kill_switch_state(bot_id, state):
     kill_switch_file = BOTS[bot_id]["kill_switch_file"]
@@ -178,15 +187,27 @@ def reset_kill_switch_daily():
     today = datetime.now(ZoneInfo("America/Edmonton")).strftime('%Y-%m-%d')
     for bot_id in BOTS:
         with kill_switch_lock:
-            if kill_switch_equity_open.get(bot_id, {}).get('date') != today:
-                kill_switch_equity_open[bot_id] = {'date': today, 'open': None}
+            state = load_kill_switch_state(bot_id)
+            if state.get("starting_equity_date") != today:
+                # Calculate starting equity for the day
+                account = load_account(bot_id)
+                all_symbols = set(account["positions"].keys())
+                prices = fetch_latest_prices(list(all_symbols))
+                position_stats = calculate_position_stats(account["positions"], prices)
+                total_margin = sum(pos['margin_used'] for pos in position_stats)
+                total_pl = sum(pos['pnl'] for pos in position_stats)
+                available_cash = float(account["balance"])
+                equity = available_cash + total_margin + total_pl
+
+                state["starting_equity"] = equity
+                state["starting_equity_date"] = today
+                kill_switch_equity_open[bot_id] = {'date': today, 'open': equity}
                 kill_switch_breach_start[bot_id] = None
-                state = load_kill_switch_state(bot_id)
                 if state["active"]:
                     state["active"] = False
                     state["reset_uuid"] = str(uuid.uuid4())
-                    save_kill_switch_state(bot_id, state)
-                logger.info(f"Kill switch daily reset for bot {bot_id}")
+                save_kill_switch_state(bot_id, state)
+                logger.info(f"Kill switch daily reset for bot {bot_id} with starting equity {equity}")
 
 # --- Core Functions ---
 def fetch_latest_prices(symbols):
@@ -456,6 +477,9 @@ def dashboard():
     prices = fetch_latest_prices(list(all_symbols))
 
     today = datetime.now(ZoneInfo("America/Edmonton")).strftime('%Y-%m-%d')
+    # Ensure daily reset has run to set starting equity
+    reset_kill_switch_daily()
+
     for bot_id in BOTS:
         account = load_account(bot_id)
         position_stats = calculate_position_stats(account["positions"], prices)
@@ -466,11 +490,14 @@ def dashboard():
 
         # Kill switch calculations
         with kill_switch_lock:
-            if kill_switch_equity_open.get(bot_id, {}).get('date') != today:
-                kill_switch_equity_open[bot_id] = {'date': today, 'open': equity}
-            starting_equity = kill_switch_equity_open[bot_id]['open'] or equity
-            equity_change_pct = ((equity - starting_equity) / starting_equity * 100) if starting_equity > 0 else 0
             kill_switch_status = load_kill_switch_state(bot_id)
+            starting_equity = kill_switch_status.get("starting_equity")
+            if starting_equity is None or kill_switch_status.get("starting_equity_date") != today:
+                # Log warning but rely on reset_kill_switch_daily to set the correct value
+                logger.warning(f"Starting equity not found or outdated for bot {bot_id}, should be set by reset_kill_switch_daily")
+                starting_equity = equity  # Fallback to avoid division by zero
+            equity_change_pct = ((equity - starting_equity) / starting_equity * 100) if starting_equity > 0 else 0
+            logger.info(f"Bot {bot_id}: equity={equity}, starting_equity={starting_equity}, equity_change_pct={equity_change_pct}")
             kill_switch_color = "red" if kill_switch_status["active"] else "green" if equity_change_pct >= 0 else "red"
             breach_time_remaining = 0
             if kill_switch_breach_start.get(bot_id):
@@ -1055,9 +1082,10 @@ def check_and_trigger_stop_losses_and_kill_switch():
                 # Kill switch logic
                 with kill_switch_lock:
                     today = now.strftime('%Y-%m-%d')
-                    if kill_switch_equity_open.get(bot_id, {}).get('date') != today:
-                        kill_switch_equity_open[bot_id] = {'date': today, 'open': equity}
-                    starting_equity = kill_switch_equity_open[bot_id]['open'] or equity
+                    starting_equity = kill_switch_status.get("starting_equity", equity)
+                    if kill_switch_status.get("starting_equity_date") != today:
+                        logger.warning(f"Starting equity not found or outdated for bot {bot_id}, should be set by reset_kill_switch_daily")
+                        starting_equity = equity
                     loss_pct = ((starting_equity - equity) / starting_equity * 100) if starting_equity > 0 else 0
 
                     if (now - last_price_update_dt).total_seconds() > MAX_STALE_PRICE:
