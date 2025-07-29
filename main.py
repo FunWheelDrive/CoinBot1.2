@@ -1151,7 +1151,7 @@ def check_and_trigger_stop_losses_and_kill_switch():
         except Exception as e:
             logger.error(f"Error in stop loss/kill switch checker: {str(e)}", exc_info=True)
 
-        time.sleep(5)
+        time.sleep(2)
 
 stop_loss_thread = threading.Thread(target=check_and_trigger_stop_losses_and_kill_switch, daemon=True)
 stop_loss_thread.start()
